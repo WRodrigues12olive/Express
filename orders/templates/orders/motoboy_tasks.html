@@ -1,0 +1,236 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+<link rel="stylesheet" href="{% static 'orders/css/motoboy_tasks.css' %}">
+
+<div class="app-container font-sans">
+    
+    <div id="toast" class="position-absolute top-0 start-50 translate-middle-x mt-4 z-3 text-white px-4 py-2 rounded-pill shadow-lg d-none align-items-center gap-2" style="background-color: #1e293b; width: 90%; transition: opacity 0.3s;">
+        <i id="toast-icon" class="bi bi-check-circle text-success"></i>
+        <span id="toast-msg" class="small fw-bold text-truncate">Sucesso!</span>
+    </div>
+
+    <div id="view-list" class="view-transition slide-out-left active d-flex flex-column h-100 w-100">
+        
+        <div class="bg-slate-900 text-white pt-5 pb-4 px-4 rounded-bottom-4 shadow-sm shrink-0 position-relative z-1">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div class="d-flex align-items-center gap-3">
+                    <div class="bg-primary rounded-circle d-flex align-items-center justify-content-center border border-2 border-dark shadow-inner" style="width: 48px; height: 48px;">
+                        <i class="bi bi-bicycle fs-4 text-white"></i>
+                    </div>
+                    <div>
+                        <h5 class="fw-bold mb-0">Olá, {{ request.user.first_name|default:request.user.username }}</h5>
+                        <div class="d-flex align-items-center gap-2 mt-1">
+                            <span class="rounded-circle bg-success" style="width: 8px; height: 8px; animation: pulse 2s infinite;"></span>
+                            <span class="small text-slate-400 fw-bold">{{ request.user.motoboy_profile.get_category_display }} • Em Rota</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex gap-2 overflow-x-auto custom-scrollbar pb-2 justify-content-center">
+                <div class="bg-slate-800 border border-secondary border-opacity-25 p-3 rounded-4 text-center" style="min-width: 110px;">
+                    <p class="text-slate-400 fw-bold text-uppercase mb-1" style="font-size: 0.65rem; letter-spacing: 1px;">OS Ativas</p>
+                    <p class="fs-3 fw-bold text-white mb-0" id="kpi-os-ativas">{{ ativas_data|length }}</p>
+                </div>
+                <div class="bg-slate-800 border border-secondary border-opacity-25 p-3 rounded-4 text-center" style="min-width: 110px;">
+                    <p class="text-slate-400 fw-bold text-uppercase mb-1" style="font-size: 0.65rem; letter-spacing: 1px;">Entregas Rest.</p>
+                    <p class="fs-3 fw-bold text-warning mb-0" id="kpi-entregas">-</p>
+                </div>
+                <div class="bg-slate-800 border border-secondary border-opacity-25 p-3 rounded-4 text-center" style="min-width: 110px;">
+                    <p class="text-slate-400 fw-bold text-uppercase mb-1" style="font-size: 0.65rem; letter-spacing: 1px;">Entregas Feitas</p>
+                    <p class="fs-3 fw-bold text-success mb-0">{{ entregas_concluidas }}</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="px-4 py-3 shrink-0 d-flex align-items-center justify-content-between">
+            <h6 class="fw-bold text-dark mb-0">Minhas Entregas</h6>
+        </div>
+
+        <div class="flex-grow-1 overflow-y-auto px-4 pb-5 custom-scrollbar" id="os-list-container">
+            </div>
+
+        <div class="position-absolute bottom-0 w-100 bg-white border-top pb-safe d-flex justify-content-around align-items-center z-2">
+            <button class="btn btn-link text-primary text-decoration-none d-flex flex-column align-items-center p-2">
+                <i class="bi bi-list-task fs-5 mb-1"></i>
+                <span class="fw-bold" style="font-size: 0.65rem;">Ativas</span>
+            </button>
+            <a href="{% url 'motoboy_profile' %}" class="btn btn-link text-secondary text-decoration-none d-flex flex-column align-items-center p-2">
+                <i class="bi bi-person fs-5 mb-1"></i>
+                <span class="fw-bold" style="font-size: 0.65rem;">Perfil</span>
+            </a>
+        </div>
+    </div>
+
+    <div id="view-execution" class="view-transition slide-in-right bg-slate-50 d-flex flex-column h-100 w-100">
+        
+        <div class="bg-slate-900 text-white px-3 py-3 shrink-0 d-flex align-items-center justify-content-between z-1 shadow-sm">
+            <button onclick="closeOS()" class="btn btn-link text-white p-2 text-decoration-none rounded-circle hover-bg-slate-800">
+                <i class="bi bi-arrow-left fs-4"></i>
+            </button>
+            <div class="text-center">
+                <h6 class="fw-bold font-monospace mb-0 text-slate-300" id="exec-os-number">OS-0000</h6>
+                <p class="text-primary mb-0" style="font-size: 0.7rem;" id="exec-etapa">Etapa X de Y</p>
+            </div>
+            <button class="btn btn-link text-slate-400 p-2 text-decoration-none">
+                <i class="bi bi-exclamation-triangle fs-5"></i>
+            </button>
+        </div>
+
+        <div class="flex-grow-1 overflow-y-auto pb-5 position-relative custom-scrollbar" style="padding-bottom: 140px !important;">
+            
+            <div class="bg-white p-4 rounded-bottom-4 shadow-sm border-bottom border-light mb-4" id="exec-current-card">
+                </div>
+
+            <div class="px-4">
+                <h6 class="fw-bold text-slate-400 text-uppercase mb-4 ms-2" style="font-size: 0.7rem; letter-spacing: 1px;">Roteiro Completo</h6>
+                <div class="position-relative ps-3" id="exec-timeline">
+                    </div>
+            </div>
+        </div>
+
+        <div class="position-absolute bottom-0 w-100 bg-white border-top p-3 pb-safe z-3 shadow-lg" id="exec-bottom-action">
+            <form id="form-confirmar-etapa" method="POST" action="">
+                {% csrf_token %}
+                <input type="hidden" name="status" id="form-novo-status" value="">
+                
+                <button type="button" onclick="confirmarEtapa()" id="btn-confirmar" class="btn w-100 py-3 rounded-4 fw-bold fs-6 text-white d-flex align-items-center justify-content-center gap-2 shadow-sm transition-transform active:scale-95">
+                    <i class="bi bi-check-circle fs-5"></i> <span id="btn-confirmar-text">Confirmar</span>
+                </button>
+            </form>
+            
+            <button type="button" onclick="abrirModalProblema()" class="btn btn-link text-secondary w-100 mt-2 text-decoration-none fw-bold" style="font-size: 0.8rem;">
+                <i class="bi bi-exclamation-octagon"></i> Reportar Problema
+            </button>
+        </div>
+    </div>
+
+    <div class="modal fade" id="problemModal" tabindex="-1" aria-hidden="true" style="z-index: 1070;">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 rounded-4 shadow-lg">
+                <form id="form-problem" method="POST" action="">
+                    {% csrf_token %}
+                    <div class="modal-header bg-danger text-white border-0 rounded-top-4">
+                        <h5 class="modal-title fw-bold"><i class="bi bi-exclamation-triangle-fill"></i> Reportar Problema</h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    
+                    <div class="modal-body p-4 bg-slate-50">
+                        <p class="text-slate-500 small mb-4">A sua rota será pausada e o despachante será notificado imediatamente.</p>
+                        
+                        <div class="mb-3">
+                            <label class="form-label fw-bold text-slate-500 small text-uppercase">Motivo Principal</label>
+                            <select name="motivo" class="form-select form-select-lg rounded-3 border-light shadow-sm fw-bold text-dark" required>
+                                <option value="">Selecione um motivo...</option>
+                                <option value="Destinatário Ausente">Destinatário Ausente</option>
+                                <option value="Endereço não localizado">Endereço não localizado</option>
+                                <option value="Mercadoria recusada">Mercadoria recusada pelo cliente</option>
+                                <option value="Veículo avariado / Acidente">Veículo avariado / Acidente</option>
+                                <option value="Local Fechado">Local Fechado</option>
+                                <option value="Outro">Outro Motivo</option>
+                            </select>
+                        </div>
+                        
+                        <div class="mb-2">
+                            <label class="form-label fw-bold text-slate-500 small text-uppercase">Detalhes (Opcional)</label>
+                            <textarea name="detalhes" class="form-control rounded-3 border-light shadow-sm" rows="3" placeholder="Explique a situação..."></textarea>
+                        </div>
+                    </div>
+                    
+                    <div class="modal-footer bg-white border-top-0 p-3 d-flex gap-2">
+                        <button type="button" class="btn btn-light fw-bold text-secondary flex-grow-1 py-3 rounded-4" data-bs-dismiss="modal">Cancelar</button>
+                        <button type="submit" class="btn btn-danger fw-bold flex-grow-1 py-3 rounded-4 shadow-sm" onclick="this.innerHTML='<span class=\'spinner-border spinner-border-sm\'></span> Enviando...'; this.form.submit();">
+                            Confirmar Ocorrência
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="podModal" tabindex="-1" aria-hidden="true" style="z-index: 1060;">
+        <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content border-0 rounded-4 shadow-lg">
+                <form id="form-pod" method="POST" action="" enctype="multipart/form-data">
+                    {% csrf_token %}
+                    <div class="modal-header bg-success text-white border-0 rounded-top-4">
+                        <h5 class="modal-title fw-bold"><i class="bi bi-camera"></i> Comprovante de Entrega</h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    
+                    <div class="modal-body p-4 bg-slate-50">
+                        <div class="mb-4">
+                            <label class="form-label fw-bold text-slate-500 small text-uppercase">Quem recebeu?</label>
+                            <input type="text" name="receiver_name" id="receiver_name" class="form-control form-control-lg rounded-3 shadow-sm border-light" placeholder="Ex: João Silva (Porteiro)" required>
+                        </div>
+                        
+                        <div class="mb-2">
+                            <label class="form-label fw-bold text-slate-500 small text-uppercase">Foto do Canhoto / Pacote</label>
+                            <div class="bg-white border rounded-4 p-4 text-center position-relative shadow-sm" style="border-style: dashed !important; border-width: 2px !important;">
+                                <input type="file" name="proof_photo" id="proof_photo" class="position-absolute top-0 start-0 w-100 h-100 opacity-0" style="cursor: pointer;" accept="image/*" capture="environment">
+                                <i id="icone-camera" class="bi bi-camera fs-1 text-slate-300"></i>
+                                <p class="mb-0 text-slate-400 small fw-bold mt-2" id="foto-texto">Toque aqui para abrir a câmera</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="modal-footer bg-white border-top-0 p-3">
+                        <button type="submit" class="btn btn-success w-100 py-3 rounded-4 fw-bold shadow-sm d-flex justify-content-center align-items-center gap-2" onclick="this.innerHTML='<span class=\'spinner-border spinner-border-sm\'></span> Enviando...'; this.form.submit();">
+                            <i class="bi bi-check2-circle fs-5"></i> Finalizar Entrega
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bloco de dados dinâmicos em JS, consumidos pelo script estático -->
+    <script>
+    window.MOTOBOY_ORDERS = [
+        {% for data in ativas_data %}
+        {
+            id: "{{ data.os.id }}",
+            os_number: "{{ data.os.os_number }}",
+            priority: "{{ data.os.priority }}",
+            priorityDisplay: "{{ data.os.get_priority_display }}",
+            status: "{{ data.os.status }}",
+            has_children: {{ data.has_children|yesno:"true,false" }},
+            child_numbers: "{{ data.child_numbers|join:', ' }}",
+            stops: [
+                {% for stop in data.stops %}
+                {
+                    id: "{{ stop.id }}",
+                    type: "{{ stop.stop_type }}",
+                    sequence: {{ stop.sequence }},
+                    is_completed: {{ stop.is_completed|yesno:"true,false" }},
+                    // Pega inteligentemente os dados da OS daquela parada específica
+                    name: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_name|escapejs }}{% else %}{{ stop.destination.destination_name|escapejs }}{% endif %}",
+                    address: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_street|escapejs }}, {{ stop.service_order.origin_number }} - {{ stop.service_order.origin_district|escapejs }}{% else %}{{ stop.destination.destination_street|escapejs }}, {{ stop.destination.destination_number }} - {{ stop.destination.destination_district|escapejs }}{% endif %}",
+                    reference: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_reference|escapejs|default:'' }}{% else %}{{ stop.destination.destination_reference|escapejs|default:'' }}{% endif %}",
+                    contact: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_phone|escapejs }}{% else %}{{ stop.destination.destination_phone|escapejs }}{% endif %}",
+                    os_origem: "{{ stop.service_order.os_number }}",
+                    
+                    items_details: [
+                        {% if stop.stop_type == 'COLETA' %}
+                            {% for item in stop.service_order.items.all %}
+                            { desc: "{{ item.description|escapejs }}", qty: {{ item.total_quantity }}, type: "{{ item.item_type|escapejs|default:'Item' }}" },
+                            {% endfor %}
+                        {% else %}
+                            {% for dist in stop.destination.distributed_items.all %}
+                            { desc: "{{ dist.item.description|escapejs }}", qty: {{ dist.quantity_allocated }}, type: "{{ dist.item.item_type|escapejs|default:'Item' }}" },
+                            {% endfor %}
+                        {% endif %}
+                    ]
+                },
+                {% endfor %}
+            ]
+        },
+        {% endfor %}
+    ];
+    </script>
+</div>
+
+<script src="{% static 'orders/js/motoboy_tasks.js' %}"></script>
+{% endblock %}

@@ -1,0 +1,9 @@
+body { background-color: #f8fafc; font-family: 'Segoe UI', system-ui, sans-serif; }
+.bg-slate-900 { background-color: #0f172a; }
+.text-primary-custom { color: #1d4ed8; }
+.btn-primary-custom { background-color: #1d4ed8; border: none; transition: 0.3s; }
+.btn-primary-custom:hover { background-color: #1e3a8a; transform: translateY(-2px); }
+.input-custom { background-color: #f8fafc; border: 1px solid #cbd5e1; padding: 0.6rem 1rem; border-radius: 0.5rem; transition: all 0.2s; }
+.input-custom:focus { background-color: #ffffff; border-color: #3b82f6; box-shadow: 0 0 0 0.25rem rgba(59, 130, 246, 0.25); outline: none; }
+.card-custom { border: none; border-radius: 1rem; box-shadow: 0 10px 25px rgba(0,0,0,0.05); overflow: hidden; }
+

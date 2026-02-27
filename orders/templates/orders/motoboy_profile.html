@@ -1,0 +1,100 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+<link rel="stylesheet" href="{% static 'orders/css/motoboy_profile.css' %}">
+
+<div class="d-flex align-items-center min-vh-100 py-5">
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-12 col-md-8 col-lg-6">
+                
+                <div class="card card-custom bg-white">
+                    
+                    <div class="bg-slate-900 text-white p-4 p-md-5 text-center position-relative">
+                        {% if not is_first_access %}
+                        <a href="{% url 'motoboy_tasks' %}" class="btn btn-sm btn-outline-light position-absolute top-0 start-0 m-3 border-0">
+                            <i class="bi bi-arrow-left"></i> Voltar
+                        </a>
+                        {% endif %}
+                        
+                        <div class="bg-white text-primary-custom rounded-circle d-inline-flex align-items-center justify-content-center mb-3 shadow" style="width: 70px; height: 70px;">
+                            <i class="bi bi-person-vcard fs-1"></i>
+                        </div>
+                        
+                        {% if is_first_access %}
+                            <h3 class="fw-bold mb-1">Bem-vindo(a), {{ user.first_name|default:user.username }}!</h3>
+                            <p class="text-slate-400 small mb-0">Para começar a receber corridas, precisamos que complete seu cadastro.</p>
+                        {% else %}
+                            <h3 class="fw-bold mb-1">Olá, {{ user.first_name|default:user.username }}!</h3>
+                            <p class="text-slate-400 small mb-0">Mantenha os dados do seu veículo sempre atualizados.</p>
+                        {% endif %}
+                    </div>
+
+                    <div class="card-body p-4 p-md-5">
+                        
+                        {% if messages %}
+                            {% for message in messages %}
+                                <div class="alert alert-success py-2 small fw-bold text-center border-0 rounded-3">
+                                    <i class="bi bi-check-circle-fill me-1"></i> {{ message }}
+                                </div>
+                            {% endfor %}
+                        {% endif %}
+
+                        <form method="POST">
+                            {% csrf_token %}
+                            
+                            <h6 class="fw-bold text-secondary mb-3 text-uppercase small tracking-wide border-bottom pb-2">Informações Pessoais</h6>
+                            
+                            <div class="row g-3 mb-4">
+                                <div class="col-md-6">
+                                    <label class="form-label small fw-bold text-secondary mb-1">Nome Completo</label>
+                                    <input type="text" name="first_name" class="form-control input-custom" value="{{ user.first_name }}" required>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label small fw-bold text-secondary mb-1">Telefone / WhatsApp</label>
+                                    <input type="text" name="phone" class="form-control input-custom" value="{{ user.phone }}" required>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label small fw-bold text-secondary mb-1">CPF (Login)</label>
+                                    <input type="text" class="form-control input-custom bg-light" value="{{ user.cnpj_cpf }}" readonly title="Para alterar o CPF entre em contato com o suporte">
+                                </div>
+                            </div>
+
+                            <h6 class="fw-bold text-secondary mb-3 text-uppercase small tracking-wide border-bottom pb-2">Dados do Veículo</h6>
+
+                            <div class="row g-3 mb-4">
+                                <div class="col-md-6">
+                                    <label class="form-label small fw-bold text-secondary mb-1">Nº da CNH *</label>
+                                    <input type="text" name="cnh_number" class="form-control input-custom" 
+                                           value="{% if 'Pendente' not in perfil.cnh_number %}{{ perfil.cnh_number }}{% endif %}" 
+                                           placeholder="Ex: 12345678900" required>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label small fw-bold text-secondary mb-1">Placa do Veículo *</label>
+                                    <input type="text" name="vehicle_plate" class="form-control input-custom text-uppercase" 
+                                           value="{% if 'Pendente' not in perfil.vehicle_plate %}{{ perfil.vehicle_plate }}{% endif %}" 
+                                           placeholder="Ex: ABC1D23" required maxlength="10">
+                                </div>
+                            </div>
+
+                            <div class="d-flex flex-column gap-2 mt-2">
+                                <button type="submit" class="btn btn-primary-custom w-100 py-3 fw-bold rounded-3 text-white">
+                                    {% if is_first_access %}Salvar e Acessar Painel{% else %}Atualizar Meu Perfil{% endif %} <i class="bi bi-arrow-right ms-1"></i>
+                                </button>
+                                
+                                {% if is_first_access %}
+                                <a href="{% url 'logout' %}" class="btn btn-light w-100 py-2 fw-bold rounded-3 text-danger border">
+                                    Sair da Conta
+                                </a>
+                                {% endif %}
+                            </div>
+                        </form>
+                    </div>
+                </div>
+                
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
