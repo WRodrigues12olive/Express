@@ -295,6 +295,57 @@ def merge_os_view(request):
 
     return JsonResponse({'status': 'success'})
 
+
+@login_required
+@require_POST
+def unmerge_os_view(request):
+    """
+    Desfaz a mesclagem de uma OS filha, voltando ela para o estado independente (PENDENTE).
+    Somente OS que já foram mescladas (status=AGRUPADO e com parent_os definido) podem ser desfeitas.
+    """
+    if request.user.type != 'DISPATCHER' and not request.user.is_superuser:
+        return JsonResponse({'status': 'error', 'message': 'Sem permissão.'}, status=403)
+
+    data = json.loads(request.body or "{}")
+    child_id = data.get('child_os')
+
+    if not child_id:
+        return JsonResponse({'status': 'error', 'message': 'OS filha não informada.'}, status=400)
+
+    child_os = get_object_or_404(ServiceOrder, id=child_id)
+
+    # Só permite desfazer se de fato for uma OS mesclada e ainda estiver na fila (sem motoboy)
+    if not child_os.parent_os or child_os.status != 'AGRUPADO':
+        return JsonResponse({'status': 'error', 'message': 'Esta OS não está mesclada ou já foi atribuída.'}, status=400)
+
+    parent = child_os.parent_os
+
+    with transaction.atomic():
+        # 1. Remove o vínculo com a mãe e volta o status para PENDENTE
+        child_os.parent_os = None
+        child_os.status = 'PENDENTE'
+
+        # Remove tags de log específicas, se existirem
+        for marker in ["[AGRUPADA]", "[MESCLADA]"]:
+            if child_os.operational_notes and marker in child_os.operational_notes:
+                child_os.operational_notes = child_os.operational_notes.replace(marker, "").strip()
+
+        child_os.save()
+
+        # 2. Atualiza o log da mãe (remove referência visual se quiser)
+        if parent:
+            if parent.operational_notes and "[GRUPO]" in parent.operational_notes:
+                # não é crítico limpar tudo, apenas adicionamos uma linha de log
+                parent.operational_notes += f"\n[DESFEITO] OS {child_os.os_number} removida do grupo."
+
+            # Se não houver mais filhas, volta o flag de múltiplas entregas
+            if not parent.child_orders.exists():
+                parent.is_multiple_delivery = False
+
+            parent.save()
+
+    return JsonResponse({'status': 'success'})
+
 @login_required
 def motoboy_tasks_view(request):
     if request.user.type != 'MOTOBOY':
@@ -437,17 +488,50 @@ def assign_motoboy_view(request, os_id):
 
 @login_required
 def reorder_stops_view(request):
-    if request.method == 'POST':
-        data = json.loads(request.body)
-        stop_ids = data.get('stops', [])
-        
-        from orders.models import RouteStop
-        
-        # O Javascript manda a lista de IDs na nova ordem. A gente salva a nova sequência no banco (1, 2, 3...)
-        for index, stop_id in enumerate(stop_ids):
-            RouteStop.objects.filter(id=stop_id).update(sequence=index + 1)
-            
-        return JsonResponse({'status': 'success'})
+    if request.user.type != 'DISPATCHER' and not request.user.is_superuser:
+        return JsonResponse({'status': 'error', 'message': 'Sem permissão.'}, status=403)
+
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Método inválido.'}, status=405)
+
+    data = json.loads(request.body or "{}")
+    raw_ids = data.get('stops', [])
+
+    from orders.models import RouteStop
+
+    # Normaliza os IDs preservando a ordem (o JS manda strings às vezes)
+    stop_ids = []
+    for sid in raw_ids:
+        try:
+            stop_ids.append(int(sid))
+        except (TypeError, ValueError):
+            continue
+
+    if not stop_ids:
+        return JsonResponse({'status': 'error', 'message': 'Lista de paradas vazia.'}, status=400)
+
+    stops_meta = list(RouteStop.objects.filter(id__in=stop_ids).values('id', 'stop_type'))
+    id_to_type = {s['id']: s['stop_type'] for s in stops_meta}
+
+    # Remove IDs inválidos/ausentes do banco, mantendo a ordem
+    stop_ids = [sid for sid in stop_ids if sid in id_to_type]
+    if not stop_ids:
+        return JsonResponse({'status': 'error', 'message': 'Nenhuma parada válida encontrada.'}, status=400)
+
+    # REGRA: sempre forçar COLETA como 1ª parada na ordenação
+    if not any(id_to_type[sid] == 'COLETA' for sid in stop_ids):
+        return JsonResponse({'status': 'error', 'message': 'A rota precisa conter uma parada de COLETA.'}, status=400)
+
+    if id_to_type.get(stop_ids[0]) != 'COLETA':
+        first_collection_id = next(sid for sid in stop_ids if id_to_type.get(sid) == 'COLETA')
+        stop_ids.remove(first_collection_id)
+        stop_ids.insert(0, first_collection_id)
+
+    # O Javascript manda a lista de IDs na nova ordem. A gente salva a nova sequência no banco (1, 2, 3...)
+    for index, stop_id in enumerate(stop_ids):
+        RouteStop.objects.filter(id=stop_id).update(sequence=index + 1)
+
+    return JsonResponse({'status': 'success'})
 
 @login_required
 @require_POST
@@ -588,14 +672,33 @@ def report_problem_view(request, stop_id):
 
     # INTELIGÊNCIA DE ROTA:
     if motivo == 'Veículo avariado / Acidente':
+        # Travamos a rota inteira até o despachante decidir (socorro / transferência)
         current_stop.save()
         messages.warning(request, "Veículo avariado reportado! Rota suspensa. Aguarde o socorro ou instruções.")
     else:
+        # Marca a parada atual como falhada
         current_stop.is_completed = True
         current_stop.is_failed = True
         current_stop.completed_at = timezone.now()
         current_stop.save()
-        messages.warning(request, f"Ocorrência registada. Pode continuar para a próxima entrega.")
+
+        # Regra especial: se falhou na COLETA, nenhuma entrega ligada a essa coleta pode continuar
+        if current_stop.stop_type == 'COLETA':
+            # Todas as paradas de ENTREGA desta mesma OS são invalidadas
+            RouteStop.objects.filter(
+                service_order=os,
+                stop_type='ENTREGA',
+                is_completed=False
+            ).update(
+                is_completed=True,
+                is_failed=True,
+                completed_at=timezone.now()
+            )
+            os.operational_notes += "\n[⚠️ ROTEIRO] Coleta não realizada. Entregas dessa coleta foram bloqueadas automaticamente."
+            messages.warning(request, "Coleta não realizada. As entregas vinculadas a esta coleta foram bloqueadas.")
+        else:
+            # Para falhas em entrega/transferência, a rota pode seguir para as próximas paradas
+            messages.warning(request, "Ocorrência registada. Pode continuar para a próxima etapa da rota.")
 
     os.save()
     return redirect('motoboy_tasks')
@@ -655,9 +758,10 @@ def transfer_route_view(request, os_id):
     
     data = json.loads(request.body)
     new_motoboy_id = data.get('new_motoboy_id')
-    transfer_address = data.get('transfer_address', 'Local de Encontro não especificado')
+    transfer_address = (data.get('transfer_address') or '').strip()
 
-    os_root = get_object_or_404(ServiceOrder, id=os_id).parent_os or get_object_or_404(ServiceOrder, id=os_id)
+    os_obj = get_object_or_404(ServiceOrder, id=os_id)
+    os_root = os_obj.parent_os or os_obj
     grouped_orders = ServiceOrder.objects.filter(Q(id=os_root.id) | Q(parent_os=os_root))
     
     from logistics.models import MotoboyProfile
@@ -665,9 +769,15 @@ def transfer_route_view(request, os_id):
     new_motoboy = get_object_or_404(MotoboyProfile, id=new_motoboy_id)
 
     with transaction.atomic():
+        group_stops = RouteStop.objects.filter(service_order__in=grouped_orders)
+        is_collected = group_stops.filter(stop_type='COLETA', is_completed=True).exists()
+
+        # Pega a primeira parada pendente "real" (ignorando a parada fantasma de aguardar socorro)
         first_pending = RouteStop.objects.filter(
             service_order__in=grouped_orders,
             is_completed=False
+        ).exclude(
+            failure_reason__icontains="[AGUARDANDO SOCORRO]"
         ).order_by('sequence').first()
 
         if not first_pending:
@@ -681,9 +791,51 @@ def transfer_route_view(request, os_id):
                 service_order=os_root,
                 motoboy=old_motoboy,
                 stop_type='TRANSFERENCIA',
-                sequence=99, 
+                sequence=99,
                 failure_reason="[AGUARDANDO SOCORRO] Veículo avariado."
             )
+
+        # ============================
+        # FLUXO INTELIGENTE
+        # - Se JÁ COLETOU: mantém o fluxo atual (pede ponto de encontro)
+        # - Se NÃO COLETOU: reatribui a OS para o novo motoboy ir na coleta original
+        # ============================
+        if not is_collected:
+            # Reatribui todas as paradas pendentes para o novo motoboy (inclui a COLETA original)
+            pending_real_stops = RouteStop.objects.filter(
+                service_order__in=grouped_orders, is_completed=False
+            ).exclude(
+                failure_reason__icontains="[AGUARDANDO SOCORRO]"
+            ).exclude(
+                failure_reason__icontains="Encontro:"
+            )
+
+            pending_real_stops.update(motoboy=new_motoboy)
+
+            for stop in pending_real_stops:
+                if stop.failure_reason and ("avariado" in stop.failure_reason or "OCORRÊNCIA" in stop.failure_reason):
+                    stop.failure_reason = ""
+                    stop.save()
+
+            new_status = 'ACEITO'
+            grouped_orders.update(motoboy=new_motoboy, status=new_status)
+
+            os_root.status = new_status
+            os_root.motoboy = new_motoboy
+            os_root.operational_notes += (
+                f"\n[🚨 SOCORRO] Veículo avariado ANTES da coleta. "
+                f"OS reatribuída para {new_motoboy.user.first_name} (coleta no endereço original)."
+            )
+            os_root.save()
+
+            return JsonResponse({'status': 'success'})
+
+        # Se já coletou, é necessário um ponto de encontro para transferência de carga
+        if not transfer_address:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Esta OS já foi coletada. Informe o local de encontro para transferir a carga.'
+            }, status=400)
 
         # 2. Abre espaço na sequência para a nova Transferência
         seq_transf = first_pending.sequence
@@ -703,15 +855,21 @@ def transfer_route_view(request, os_id):
         ).exclude(failure_reason__icontains="[AGUARDANDO SOCORRO]").exclude(failure_reason__icontains="Encontro:")
 
         pending_real_stops.update(motoboy=new_motoboy)
-        
+
         for stop in pending_real_stops:
-            if "avariado" in stop.failure_reason or "OCORRÊNCIA" in stop.failure_reason:
+            if stop.failure_reason and ("avariado" in stop.failure_reason or "OCORRÊNCIA" in stop.failure_reason):
                 stop.failure_reason = ""
                 stop.save()
 
         # 5. Corrige o status e Evita o Bug de Memória do Django!
-        grouped_orders.update(motoboy=new_motoboy, status='ACEITO')
-        os_root.status = 'ACEITO' # <-- SALVA O STATUS CORRETO NA MEMÓRIA ANTES DO SAVE DO HISTÓRICO
+        new_status = 'COLETADO'
+
+        # Atualiza o status e o motoboy em toda a cadeia de ordens (Mãe e Filhas)
+        grouped_orders.update(motoboy=new_motoboy, status=new_status)
+
+        # Garante que a OS raiz receba a nota e seja salva corretamente na memória e no banco
+        os_root.status = new_status
+        os_root.motoboy = new_motoboy
         os_root.operational_notes += f"\n[🚨 SOCORRO] Carga transferida para {new_motoboy.user.first_name}. Ponto de encontro: {transfer_address}"
         os_root.save()
 

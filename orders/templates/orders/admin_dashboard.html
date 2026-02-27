@@ -1,79 +1,152 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div class="container mt-4">
-    <h2 class="mb-4">Painel Administrativo</h2>
+<div class="app-shell">
+    <aside class="app-sidebar d-none d-lg-flex">
+        <div class="app-sidebar-brand">
+            <i class="bi bi-truck fs-4 me-2 text-info"></i>
+            <div class="d-flex flex-column">
+                <span class="fw-bold">JRJ<span class="text-info">Express</span></span>
+                <small class="text-slate-300">Painel Administrativo</small>
+            </div>
+        </div>
+        <nav class="app-sidebar-nav">
+            <p class="text-uppercase small text-slate-400 fw-bold mb-2 px-2">Navegação</p>
+            <a href="{% url 'admin_dashboard' %}" class="app-sidebar-link active mb-1">
+                <i class="bi bi-speedometer2"></i><span>Visão Geral</span>
+            </a>
+            <a href="/admin/" class="app-sidebar-link mb-1">
+                <i class="bi bi-gear"></i><span>Backoffice Django</span>
+            </a>
+        </nav>
+        <div class="p-3 border-top border-secondary border-opacity-25 mt-auto">
+            <div class="d-flex align-items-center gap-3 px-2 py-2 rounded">
+                <div class="rounded-circle bg-secondary d-flex align-items-center justify-content-center text-white fw-bold" style="width: 40px; height: 40px;">
+                    {{ request.user.first_name|default:request.user.username|first|upper }}
+                </div>
+                <div class="d-flex flex-column text-truncate">
+                    <span class="small fw-bold text-white text-truncate">{{ request.user.get_full_name|default:request.user.username }}</span>
+                    <span class="text-slate-400" style="font-size: 0.7rem;">Administrador</span>
+                </div>
+            </div>
+        </div>
+    </aside>
 
-    <div class="row mb-4">
-        <div class="col-md-3">
-            <div class="card text-white bg-primary mb-3">
-                <div class="card-body">
-                    <h5 class="card-title">Total Usuários</h5>
-                    <p class="card-text display-6">{{ total_users }}</p>
+    <main class="app-main">
+        <header class="app-header">
+            <div class="d-flex align-items-center gap-3">
+                <button class="btn btn-ghost-ds d-lg-none border" id="adminToggleSidebar">
+                    <i class="bi bi-list"></i>
+                </button>
+                <div>
+                    <h4 class="fw-bold mb-0">Painel Administrativo</h4>
+                    <p class="small mb-0 text-muted">Acompanhe o uso do sistema e as últimas ordens de serviço.</p>
                 </div>
             </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card text-white bg-success mb-3">
-                <div class="card-body">
-                    <h5 class="card-title">OS Concluídas</h5>
-                    <p class="card-text display-6">{{ os_completed }}</p>
-                </div>
+            <div class="d-flex align-items-center gap-2">
+                <a href="{% url 'register_user' %}" class="btn btn-secondary-ds">
+                    <i class="bi bi-person-plus me-1"></i> Novo Usuário
+                </a>
+                <a href="{% url 'logout' %}" class="btn btn-ghost-ds text-danger">
+                    <i class="bi bi-box-arrow-right me-1"></i> Sair
+                </a>
             </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card text-white bg-warning mb-3">
-                <div class="card-body">
-                    <h5 class="card-title">OS Pendentes</h5>
-                    <p class="card-text display-6">{{ os_pending }}</p>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card bg-light mb-3">
-                <div class="card-body">
-                    <h5 class="card-title">Ações Rápidas</h5>
-                    <a href="{% url 'register_user' %}" class="btn btn-primary w-100 mb-2">
-                        + Criar Novo Usuário
-                    </a>
-                    <a href="/admin/" class="btn btn-outline-dark btn-sm w-100">
-                        Acessar Backoffice
-                    </a>
-                </div>
-            </div>
-        </div>
-    </div>
+        </header>
 
-    <div class="card shadow">
-        <div class="card-header bg-white">
-            <h5 class="mb-0">Últimas Ordens de Serviço</h5>
-        </div>
-        <div class="card-body p-0">
-            <table class="table table-striped mb-0">
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Cliente</th>
-                        <th>Status</th>
-                        <th>Data</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for os in recent_orders %}
-                    <tr>
-                        <td>#{{ os.id }}</td>
-                        <td>{{ os.client.username }}</td>
-                        <td>{{ os.get_status_display }}</td>
-                        <td>{{ os.created_at|date:"d/m/Y H:i" }}</td>
-                    </tr>
-                    {% empty %}
-                    <tr>
-                        <td colspan="4" class="text-center p-3">Nenhuma OS registrada.</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
+        <section class="app-content">
+            <div class="container-fluid px-0">
+                <div class="row g-3 mb-4">
+                    <div class="col-md-3">
+                        <div class="ds-card h-100">
+                            <div class="ds-card-header">
+                                <span class="small text-uppercase fw-semibold text-muted">Total Usuários</span>
+                                <i class="bi bi-people text-secondary"></i>
+                            </div>
+                            <p class="display-6 fw-bold mb-0 text-primary">{{ total_users }}</p>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="ds-card h-100">
+                            <div class="ds-card-header">
+                                <span class="small text-uppercase fw-semibold text-muted">OS Concluídas</span>
+                                <i class="bi bi-check2-circle text-success"></i>
+                            </div>
+                            <p class="display-6 fw-bold mb-0 text-success">{{ os_completed }}</p>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="ds-card h-100">
+                            <div class="ds-card-header">
+                                <span class="small text-uppercase fw-semibold text-muted">OS Pendentes</span>
+                                <i class="bi bi-hourglass-split text-warning"></i>
+                            </div>
+                            <p class="display-6 fw-bold mb-0 text-warning">{{ os_pending }}</p>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="ds-card h-100">
+                            <div class="ds-card-header">
+                                <span class="small text-uppercase fw-semibold text-muted">Ações Rápidas</span>
+                                <i class="bi bi-lightning-charge text-info"></i>
+                            </div>
+                            <div class="d-grid gap-2">
+                                <a href="{% url 'register_user' %}" class="btn btn-primary-ds btn-sm">
+                                    + Criar Novo Usuário
+                                </a>
+                                <a href="/admin/" class="btn btn-secondary-ds btn-sm">
+                                    Backoffice Django
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ds-card">
+                    <div class="ds-card-header">
+                        <h5 class="mb-0">Últimas Ordens de Serviço</h5>
+                        <span class="small text-muted">{{ recent_orders|length }} registros</span>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="ds-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Cliente</th>
+                                    <th>Status</th>
+                                    <th>Data</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for os in recent_orders %}
+                                <tr>
+                                    <td class="font-monospace">#{{ os.id }}</td>
+                                    <td>{{ os.client.username }}</td>
+                                    <td>
+                                        <span class="status-badge status-{{ os.status }}">{{ os.get_status_display }}</span>
+                                    </td>
+                                    <td>{{ os.created_at|date:"d/m/Y H:i" }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="4" class="text-center py-3 text-muted">Nenhuma OS registrada.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
 </div>
+
+<script>
+document.getElementById('adminToggleSidebar')?.addEventListener('click', function () {
+    const sidebar = document.querySelector('.app-sidebar');
+    if (sidebar) {
+        sidebar.classList.toggle('open');
+    }
+});
+</script>
+
 {% endblock %}

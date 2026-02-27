@@ -56,9 +56,13 @@ setTimeout(updateSLAs, 1000);
 // ====================================================
 let problemOsId = null;
 let currentModalOsId = null;
+let transferBeforePickup = false; // true quando o problema ocorreu antes da coleta
 
-function abrirModalResolver(osId, osNumber, notes) {
+function abrirModalResolver(osId, osNumber, notes, stopType = null) {
     problemOsId = osId;
+    // Se a ocorrência veio de uma parada de COLETA, entendemos que o veículo estragou antes de coletar
+    transferBeforePickup = (stopType === 'COLETA');
+
     document.getElementById('modalProblemOsNumber').innerText = osNumber;
     document.getElementById('modalProblemNotes').innerText = notes || "Nenhuma observação registrada pelo motoboy.";
     
@@ -113,7 +117,7 @@ function assignMotoboySecurely(osId, motoboyId) {
     form.submit();
 }
 
-function openDispatchModal(id, number, status, company, priority, date, originName, originAddress) {
+function openDispatchModal(id, number, status, company, priority, date, originName, originAddress, groupIds = null, groupNumbers = null) {
     currentModalOsId = id;
     document.getElementById('modalDispOsNumber').innerText = number;
     document.getElementById('modalDispOsStatus').innerText = status;
@@ -122,6 +126,39 @@ function openDispatchModal(id, number, status, company, priority, date, originNa
     document.getElementById('modalDispDate').innerText = date;
     document.getElementById('modalDispOriginName').innerText = originName;
     document.getElementById('modalDispOriginAddress').innerText = originAddress;
+
+    // Bloco de informações de grupo / mescla (opcional)
+    const groupBox = document.getElementById('modalGroupBox');
+    const groupContent = document.getElementById('modalGroupContent');
+    if (groupBox && groupContent) {
+        const hasGroup = groupIds && groupIds.trim() !== '';
+        if (!hasGroup) {
+            groupContent.innerHTML = '';
+            groupBox.classList.add('d-none');
+        } else {
+            const ids = groupIds.split(',').map(s => s.trim()).filter(Boolean);
+            const numbers = (groupNumbers || '').split(',').map(s => s.trim());
+
+            let html = '';
+            ids.forEach((cid, idx) => {
+                const num = numbers[idx] || '';
+                html += `
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="small fw-bold text-slate-600">OS ${num || cid}</span>
+                        <button type="button"
+                                class="btn btn-outline-danger btn-xs border-0 text-uppercase fw-bold px-2 py-0"
+                                style="font-size: 0.65rem;"
+                                onclick="desfazerMescla('${cid}')">
+                            <i class="bi bi-arrow-counterclockwise"></i> Desfazer
+                        </button>
+                    </div>
+                `;
+            });
+
+            groupContent.innerHTML = html;
+            groupBox.classList.remove('d-none');
+        }
+    }
 
     const assignBox = document.getElementById('modalAssignBox');
     if (status === 'PENDENTE') assignBox.classList.remove('d-none');
@@ -206,6 +243,42 @@ function dropMerge(ev, targetOsId) {
     }
 }
 
+function desfazerMescla(childOsId) {
+    if (!childOsId) return;
+
+    if (!confirm("⚠️ Deseja DESFAZER a mescla desta OS e devolvê-la para a fila como independente?")) {
+        return;
+    }
+
+    document.body.style.cursor = 'wait';
+
+    fetch('/os/desfazer-mescla/', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCSRFToken()
+        },
+        body: JSON.stringify({ child_os: childOsId })
+    })
+    .then(res => {
+        if (!res.ok) throw new Error("Erro no servidor (Status " + res.status + ")");
+        return res.json();
+    })
+    .then(data => {
+        document.body.style.cursor = 'default';
+        if (data.status === 'success') {
+            window.location.reload();
+        } else {
+            alert("Erro do sistema: " + (data.message || 'Falha ao desfazer mescla.'));
+        }
+    })
+    .catch(err => {
+        document.body.style.cursor = 'default';
+        alert("Falha ao desfazer mescla: " + err.message);
+        console.error(err);
+    });
+}
+
 // ====================================================
 // ROTEIRIZAÇÃO E TIMELINE (MODAL)
 // ====================================================
@@ -226,7 +299,7 @@ function fetchAndRenderStops(osId) {
             const badgeColor = isColeta ? 'bg-danger' : 'bg-success';
             
             list.innerHTML += `
-                <li class="list-group-item d-flex align-items-center gap-3 py-3" data-id="${stop.id}" style="cursor: grab;">
+                <li class="list-group-item d-flex align-items-center gap-3 py-3" data-id="${stop.id}" data-type="${stop.type}" style="cursor: grab;">
                     <div class="d-flex flex-column align-items-center gap-1">
                         <span class="badge ${badgeColor} rounded-pill shadow-sm">${stop.sequence}º</span>
                     </div>
@@ -249,6 +322,16 @@ function fetchAndRenderStops(osId) {
             onEnd: function() {
                 isInteracting = false;
                 
+                const items = Array.from(list.children);
+
+                // Regra de negócio: COLETA deve ser sempre a primeira parada na ordenação
+                if (items.length > 0 && items[0].dataset.type !== 'COLETA') {
+                    const coletaItem = items.find(el => el.dataset.type === 'COLETA');
+                    if (coletaItem) {
+                        list.insertBefore(coletaItem, list.firstChild);
+                    }
+                }
+
                 let stopIds = Array.from(list.children)
                     .map(item => item.dataset.id)
                     .filter(id => id !== undefined && id !== null && id !== "");
@@ -325,6 +408,23 @@ setInterval(autoRefreshDashboard, 10000);
 function openTransferModal() {
     var resolveModal = bootstrap.Modal.getInstance(document.getElementById('resolveProblemModal'));
     if(resolveModal) resolveModal.hide();
+
+    // Ajusta a interface conforme o momento da quebra (antes ou depois da coleta)
+    const addrBox = document.getElementById('transferAddressBox');
+    const intro = document.getElementById('transferIntroText');
+
+    if (addrBox && intro) {
+        if (transferBeforePickup) {
+            // Antes da coleta: esconde campos de endereço e explica que o novo motoboy irá ao local original
+            addrBox.classList.add('d-none');
+            intro.innerText = "Veículo avariado antes da coleta. O novo motoboy irá direto ao endereço original da OS para buscar a carga.";
+        } else {
+            // Depois da coleta: mostra campos para definir ponto de encontro
+            addrBox.classList.remove('d-none');
+            intro.innerText = "Escolha o motoboy socorrista e preencha os dados do local de encontro onde a carga será transferida.";
+        }
+    }
+
     var transferModal = new bootstrap.Modal(document.getElementById('transferRouteModal'));
     transferModal.show();
 }
@@ -381,11 +481,36 @@ function submitTransferRoute() {
     const state = document.getElementById('transferState').value;
 
     if (!newMotoboyId) { alert("⚠️ Por favor, selecione o motoboy socorrista na lista!"); return; }
-    if (!street || !number || !district || !city) { alert("⚠️ Por favor, preencha pelo menos a Rua, Número, Bairro e Cidade para o local de encontro!"); return; }
+    let transferAddress = '';
 
-    let transferAddress = `${street}, ${number}`;
-    if (complement) transferAddress += ` - ${complement}`;
-    transferAddress += ` - Bairro: ${district}, ${city}/${state} - CEP: ${cep}`;
+    // Se o problema foi ANTES da coleta, não exigimos (nem usamos) endereço de encontro.
+    // O backend vai reatribuir a OS para o novo motoboy ir direto ao ponto de coleta original.
+    if (!transferBeforePickup) {
+        const hasAny = [street, number, district, city, state, cep, complement].some(v => (v || '').trim() !== '');
+
+        if (!hasAny) {
+            alert("⚠️ Esta OS já foi carregada. Informe pelo menos um endereço de encontro para transferir a carga.");
+            return;
+        }
+
+        // Monta string amigável apenas com o que foi preenchido.
+        const partes = [];
+        if (street) {
+            let linha = street;
+            if (number) linha += `, ${number}`;
+            if (complement) linha += ` - ${complement}`;
+            partes.push(linha);
+        }
+        if (district || city || state) {
+            let linha2 = '';
+            if (district) linha2 += district;
+            if (city) linha2 += (linha2 ? ' - ' : '') + city;
+            if (state) linha2 += (linha2 ? '/' : '') + state;
+            if (linha2) partes.push(linha2);
+        }
+        if (cep) partes.push(`CEP: ${cep}`);
+        transferAddress = partes.join(' | ');
+    }
 
     document.body.style.cursor = 'wait';
     fetch(`/painel-despacho/transferir/${problemOsId}/`, {

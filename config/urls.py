@@ -27,6 +27,7 @@ urlpatterns = [
     path('painel-despacho/reordenar-paradas/', views.reorder_stops_view, name='reorder_stops'),
     path('os/<int:os_id>/stops/', views.get_route_stops, name='get_route_stops'),
     path('os/mesclar/', views.merge_os_view, name='merge_os'),
+    path('os/desfazer-mescla/', views.unmerge_os_view, name='unmerge_os'),
     path('minhas-entregas/problema/<int:stop_id>/', report_problem_view, name='report_problem'),
     path('painel-despacho/resolver/<int:os_id>/', resolve_os_problem, name='resolve_os_problem'),
     path('painel-despacho/transferir/<int:os_id>/', views.transfer_route_view, name='transfer_route'),
