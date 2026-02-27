@@ -29,4 +29,6 @@ urlpatterns = [
     path('os/mesclar/', views.merge_os_view, name='merge_os'),
     path('minhas-entregas/problema/<int:stop_id>/', report_problem_view, name='report_problem'),
     path('painel-despacho/resolver/<int:os_id>/', resolve_os_problem, name='resolve_os_problem'),
+    path('painel-despacho/transferir/<int:os_id>/', views.transfer_route_view, name='transfer_route'),
+    path('painel-despacho/devolver/<int:os_id>/', views.create_return_view, name='create_return'),
 ]

@@ -92,18 +92,28 @@
         </div>
 
         <div class="position-absolute bottom-0 w-100 bg-white border-top p-3 pb-safe z-3 shadow-lg" id="exec-bottom-action">
-            <form id="form-confirmar-etapa" method="POST" action="">
-                {% csrf_token %}
-                <input type="hidden" name="status" id="form-novo-status" value="">
+            <div id="action-buttons-container">
+                <form id="form-confirmar-etapa" method="POST" action="">
+                    {% csrf_token %}
+                    <input type="hidden" name="status" id="form-novo-status" value="">
+                    
+                    <button type="button" onclick="confirmarEtapa()" id="btn-confirmar" class="btn w-100 py-3 rounded-4 fw-bold fs-6 text-white d-flex align-items-center justify-content-center gap-2 shadow-sm transition-transform active:scale-95">
+                        <i class="bi bi-check-circle fs-5"></i> <span id="btn-confirmar-text">Confirmar</span>
+                    </button>
+                </form>
                 
-                <button type="button" onclick="confirmarEtapa()" id="btn-confirmar" class="btn w-100 py-3 rounded-4 fw-bold fs-6 text-white d-flex align-items-center justify-content-center gap-2 shadow-sm transition-transform active:scale-95">
-                    <i class="bi bi-check-circle fs-5"></i> <span id="btn-confirmar-text">Confirmar</span>
+                <button type="button" onclick="abrirModalProblema()" class="btn btn-link text-secondary w-100 mt-2 text-decoration-none fw-bold" style="font-size: 0.8rem;">
+                    <i class="bi bi-exclamation-octagon"></i> Reportar Problema
                 </button>
-            </form>
+            </div>
             
-            <button type="button" onclick="abrirModalProblema()" class="btn btn-link text-secondary w-100 mt-2 text-decoration-none fw-bold" style="font-size: 0.8rem;">
-                <i class="bi bi-exclamation-octagon"></i> Reportar Problema
-            </button>
+            <div id="frozen-alert-container" class="d-none">
+                <div class="alert alert-danger mb-0 fw-bold text-center border-danger shadow-sm">
+                    <i class="bi bi-exclamation-triangle-fill fs-3 d-block mb-1"></i>
+                    ROTA SUSPENSA<br>
+                    <small class="fw-normal">Veículo avariado. Aguardando despachante transferir a carga.</small>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -205,21 +215,30 @@
                     type: "{{ stop.stop_type }}",
                     sequence: {{ stop.sequence }},
                     is_completed: {{ stop.is_completed|yesno:"true,false" }},
-                    // Pega inteligentemente os dados da OS daquela parada específica
-                    name: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_name|escapejs }}{% else %}{{ stop.destination.destination_name|escapejs }}{% endif %}",
-                    address: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_street|escapejs }}, {{ stop.service_order.origin_number }} - {{ stop.service_order.origin_district|escapejs }}{% else %}{{ stop.destination.destination_street|escapejs }}, {{ stop.destination.destination_number }} - {{ stop.destination.destination_district|escapejs }}{% endif %}",
-                    reference: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_reference|escapejs|default:'' }}{% else %}{{ stop.destination.destination_reference|escapejs|default:'' }}{% endif %}",
-                    contact: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_phone|escapejs }}{% else %}{{ stop.destination.destination_phone|escapejs }}{% endif %}",
+                    is_failed: {{ stop.is_failed|yesno:"true,false" }},
+                    is_frozen: {% if stop.failure_reason and not stop.is_completed %}true{% else %}false{% endif %},
+                    
+                    // Lógica atualizada para lidar com as 4 opções
+                    name: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_name|escapejs }}{% elif stop.stop_type == 'ENTREGA' %}{{ stop.destination.destination_name|escapejs }}{% elif stop.stop_type == 'TRANSFERENCIA' %}Ponto de Encontro (Socorro){% else %}Local de Devolução{% endif %}",
+                    
+                    // Se for Transferência/Devolução, o endereço está no failure_reason
+                    address: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_street|escapejs }}, {{ stop.service_order.origin_number }} - {{ stop.service_order.origin_district|escapejs }}{% elif stop.stop_type == 'ENTREGA' %}{{ stop.destination.destination_street|escapejs }}, {{ stop.destination.destination_number }} - {{ stop.destination.destination_district|escapejs }}{% else %}{{ stop.failure_reason|escapejs }}{% endif %}",
+                    
+                    reference: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_reference|escapejs|default:'' }}{% elif stop.stop_type == 'ENTREGA' %}{{ stop.destination.destination_reference|escapejs|default:'' }}{% else %}Sem referência{% endif %}",
+                    
+                    contact: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_phone|escapejs }}{% elif stop.stop_type == 'ENTREGA' %}{{ stop.destination.destination_phone|escapejs }}{% else %}--{% endif %}",
+                    
                     os_origem: "{{ stop.service_order.os_number }}",
                     
+                    // Os itens a mostrar: Se for entrega, mostra os do destino. Caso contrário, mostra tudo o que a OS carrega.
                     items_details: [
-                        {% if stop.stop_type == 'COLETA' %}
-                            {% for item in stop.service_order.items.all %}
-                            { desc: "{{ item.description|escapejs }}", qty: {{ item.total_quantity }}, type: "{{ item.item_type|escapejs|default:'Item' }}" },
-                            {% endfor %}
-                        {% else %}
+                        {% if stop.stop_type == 'ENTREGA' %}
                             {% for dist in stop.destination.distributed_items.all %}
                             { desc: "{{ dist.item.description|escapejs }}", qty: {{ dist.quantity_allocated }}, type: "{{ dist.item.item_type|escapejs|default:'Item' }}" },
+                            {% endfor %}
+                        {% else %}
+                            {% for item in stop.service_order.items.all %}
+                            { desc: "{{ item.description|escapejs }}", qty: {{ item.total_quantity }}, type: "{{ item.item_type|escapejs|default:'Item' }}" },
                             {% endfor %}
                         {% endif %}
                     ]

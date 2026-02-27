@@ -52,9 +52,10 @@ setInterval(updateSLAs, 60000);
 setTimeout(updateSLAs, 1000);
 
 // ====================================================
-// MODAL DE RESOLUÇÃO DE PROBLEMAS
+// MODAL DE RESOLUÇÃO DE PROBLEMAS E ATRIBUIÇÃO
 // ====================================================
 let problemOsId = null;
+let currentModalOsId = null;
 
 function abrirModalResolver(osId, osNumber, notes) {
     problemOsId = osId;
@@ -68,7 +69,6 @@ function abrirModalResolver(osId, osNumber, notes) {
 function submitResolveAction(action) {
     if (!problemOsId) return;
     
-    // Se a ação for Cancelar, usamos a rota que já existe para isso
     if (action === 'cancel') {
         if(confirm("Tem a certeza que deseja CANCELAR esta OS? A empresa será notificada.")) {
             document.body.style.cursor = 'wait';
@@ -80,7 +80,6 @@ function submitResolveAction(action) {
         return;
     }
 
-    // Se for Reativar ou Voltar para Fila, chamamos a nova função Python
     document.body.style.cursor = 'wait';
     fetch(`/painel-despacho/resolver/${problemOsId}/`, {
         method: 'POST',
@@ -92,9 +91,6 @@ function submitResolveAction(action) {
     }).then(res => window.location.reload());
 }
 
-// ====================================================
-// FUNÇÃO MESTRA DE ATRIBUIÇÃO SEGURA
-// ====================================================
 function assignMotoboySecurely(osId, motoboyId) {
     document.body.style.cursor = 'wait';
     const form = document.createElement('form');
@@ -116,23 +112,6 @@ function assignMotoboySecurely(osId, motoboyId) {
     document.body.appendChild(form);
     form.submit();
 }
-
-// ====================================================
-// ARRASTAR E SOLTAR DA OS (DRAG AND DROP)
-// ====================================================
-function drag(ev, osId) { ev.dataTransfer.setData("osId", osId); }
-function allowDrop(ev) { ev.preventDefault(); ev.currentTarget.classList.add('drag-over'); }
-function dragLeave(ev) { ev.currentTarget.classList.remove('drag-over'); }
-
-function dropAssign(ev, motoboyId) {
-    ev.preventDefault();
-    ev.currentTarget.classList.remove('drag-over');
-    var osId = ev.dataTransfer.getData("osId");
-    if (!osId) return;
-    assignMotoboySecurely(osId, motoboyId);
-}
-
-let currentModalOsId = null;
 
 function openDispatchModal(id, number, status, company, priority, date, originName, originAddress) {
     currentModalOsId = id;
@@ -174,6 +153,21 @@ function confirmCancelOS() {
     }
 }
 
+// ====================================================
+// ARRASTAR E SOLTAR DA OS E MESCLAGEM
+// ====================================================
+function drag(ev, osId) { ev.dataTransfer.setData("osId", osId); }
+function allowDrop(ev) { ev.preventDefault(); ev.currentTarget.classList.add('drag-over'); }
+function dragLeave(ev) { ev.currentTarget.classList.remove('drag-over'); }
+
+function dropAssign(ev, motoboyId) {
+    ev.preventDefault();
+    ev.currentTarget.classList.remove('drag-over');
+    var osId = ev.dataTransfer.getData("osId");
+    if (!osId) return;
+    assignMotoboySecurely(osId, motoboyId);
+}
+
 function allowOsDrop(ev) { ev.preventDefault(); ev.currentTarget.classList.add('drag-over-os'); }
 function leaveOsDrop(ev) { ev.currentTarget.classList.remove('drag-over-os'); }
 
@@ -201,11 +195,8 @@ function dropMerge(ev, targetOsId) {
         })
         .then(data => {
             document.body.style.cursor = 'default';
-            if(data.status === 'success') {
-                window.location.reload(); 
-            } else {
-                alert("Erro do sistema: " + data.message);
-            }
+            if(data.status === 'success') window.location.reload(); 
+            else alert("Erro do sistema: " + data.message);
         })
         .catch(err => {
             document.body.style.cursor = 'default';
@@ -215,6 +206,9 @@ function dropMerge(ev, targetOsId) {
     }
 }
 
+// ====================================================
+// ROTEIRIZAÇÃO E TIMELINE (MODAL)
+// ====================================================
 let modalSortableInstance = null;
 const DISPATCH_PANEL_CONFIG = window.DISPATCH_PANEL_CONFIG || {};
 
@@ -269,11 +263,8 @@ function fetchAndRenderStops(osId) {
                     },
                     body: JSON.stringify({ stops: stopIds })
                 }).then(res => {
-                    if (res.ok) {
-                        fetchAndRenderStops(osId); 
-                    } else {
-                        alert("Erro ao salvar a ordem das rotas no banco.");
-                    }
+                    if (res.ok) fetchAndRenderStops(osId); 
+                    else alert("Erro ao salvar a ordem das rotas no banco.");
                 });
             }
         });
@@ -290,6 +281,9 @@ function switchTab(tabId) {
     selectedTab.classList.remove('text-secondary'); selectedTab.classList.add('border-bottom', 'border-primary', 'border-3', 'text-primary');
 }
 
+// ====================================================
+// ATUALIZAÇÃO AUTOMÁTICA DA PÁGINA
+// ====================================================
 let isInteracting = false;
 let isModalOpen = false;
 
@@ -299,8 +293,12 @@ document.addEventListener('dragstart', () => isInteracting = true);
 document.addEventListener('dragend', () => isInteracting = false);
 document.getElementById('dispatchOsModal')?.addEventListener('show.bs.modal', () => isModalOpen = true);
 document.getElementById('resolveProblemModal')?.addEventListener('show.bs.modal', () => isModalOpen = true);
+document.getElementById('transferRouteModal')?.addEventListener('show.bs.modal', () => isModalOpen = true);
+document.getElementById('createReturnModal')?.addEventListener('show.bs.modal', () => isModalOpen = true);
 document.getElementById('dispatchOsModal')?.addEventListener('hidden.bs.modal', () => isModalOpen = false);
 document.getElementById('resolveProblemModal')?.addEventListener('hidden.bs.modal', () => isModalOpen = false);
+document.getElementById('transferRouteModal')?.addEventListener('hidden.bs.modal', () => isModalOpen = false);
+document.getElementById('createReturnModal')?.addEventListener('hidden.bs.modal', () => isModalOpen = false);
 
 function autoRefreshDashboard() {
     if (isInteracting || isModalOpen) return; 
@@ -319,6 +317,118 @@ function autoRefreshDashboard() {
         })
         .catch(error => console.log('Silencioso: Falha na autossincronização', error));
 }
-
 setInterval(autoRefreshDashboard, 10000);
 
+// ====================================================
+// TRANSFERÊNCIA E DEVOLUÇÃO (SOCORRO)
+// ====================================================
+function openTransferModal() {
+    var resolveModal = bootstrap.Modal.getInstance(document.getElementById('resolveProblemModal'));
+    if(resolveModal) resolveModal.hide();
+    var transferModal = new bootstrap.Modal(document.getElementById('transferRouteModal'));
+    transferModal.show();
+}
+
+function openReturnModal() {
+    var resolveModal = bootstrap.Modal.getInstance(document.getElementById('resolveProblemModal'));
+    if(resolveModal) resolveModal.hide();
+    var returnModal = new bootstrap.Modal(document.getElementById('createReturnModal'));
+    returnModal.show();
+}
+
+function buscarCepDevolucao(cep) {
+    cep = cep.replace(/\D/g, '');
+    if (cep.length !== 8) return;
+    fetch(`https://viacep.com.br/ws/${cep}/json/`)
+        .then(res => res.json())
+        .then(data => {
+            if (!data.erro) {
+                document.getElementById('returnStreet').value = data.logradouro;
+                document.getElementById('returnDistrict').value = data.bairro;
+                document.getElementById('returnCity').value = data.localidade;
+                document.getElementById('returnState').value = data.uf;
+                document.getElementById('returnNumber').focus();
+            } else alert("CEP não encontrado.");
+        }).catch(err => console.error(err));
+}
+
+function buscarCepTransferencia(cep) {
+    cep = cep.replace(/\D/g, '');
+    if (cep.length !== 8) return;
+    fetch(`https://viacep.com.br/ws/${cep}/json/`)
+        .then(res => res.json())
+        .then(data => {
+            if (!data.erro) {
+                document.getElementById('transferStreet').value = data.logradouro;
+                document.getElementById('transferDistrict').value = data.bairro;
+                document.getElementById('transferCity').value = data.localidade;
+                document.getElementById('transferState').value = data.uf;
+                document.getElementById('transferNumber').focus();
+            } else alert("CEP não encontrado.");
+        }).catch(err => console.error(err));
+}
+
+function submitTransferRoute() {
+    if (!problemOsId) return;
+    
+    const newMotoboyId = document.getElementById('transferMotoboySelect').value;
+    const cep = document.getElementById('transferCep').value;
+    const street = document.getElementById('transferStreet').value;
+    const number = document.getElementById('transferNumber').value;
+    const complement = document.getElementById('transferComplement').value;
+    const district = document.getElementById('transferDistrict').value;
+    const city = document.getElementById('transferCity').value;
+    const state = document.getElementById('transferState').value;
+
+    if (!newMotoboyId) { alert("⚠️ Por favor, selecione o motoboy socorrista na lista!"); return; }
+    if (!street || !number || !district || !city) { alert("⚠️ Por favor, preencha pelo menos a Rua, Número, Bairro e Cidade para o local de encontro!"); return; }
+
+    let transferAddress = `${street}, ${number}`;
+    if (complement) transferAddress += ` - ${complement}`;
+    transferAddress += ` - Bairro: ${district}, ${city}/${state} - CEP: ${cep}`;
+
+    document.body.style.cursor = 'wait';
+    fetch(`/painel-despacho/transferir/${problemOsId}/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+        body: JSON.stringify({ new_motoboy_id: newMotoboyId, transfer_address: transferAddress })
+    })
+    .then(res => res.json())
+    .then(data => {
+        if(data.status === 'success') window.location.reload();
+        else { alert("Erro ao transferir: " + data.message); document.body.style.cursor = 'default'; }
+    });
+}
+
+function submitCreateReturn() {
+    if (!problemOsId) return;
+    
+    const cep = document.getElementById('returnCep').value;
+    const street = document.getElementById('returnStreet').value;
+    const number = document.getElementById('returnNumber').value;
+    const complement = document.getElementById('returnComplement').value;
+    const district = document.getElementById('returnDistrict').value;
+    const city = document.getElementById('returnCity').value;
+    const state = document.getElementById('returnState').value;
+    
+    const priorityElem = document.getElementById('returnPriority');
+    const isPriority = priorityElem ? priorityElem.checked : false;
+
+    if (!street || !number || !district || !city) { alert("⚠️ Por favor, preencha pelo menos a Rua, Número, Bairro e Cidade para a devolução!"); return; }
+
+    let returnAddress = `${street}, ${number}`;
+    if (complement) returnAddress += ` - ${complement}`;
+    returnAddress += ` - Bairro: ${district}, ${city}/${state} - CEP: ${cep}`;
+
+    document.body.style.cursor = 'wait';
+    fetch(`/painel-despacho/devolver/${problemOsId}/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
+        body: JSON.stringify({ return_address: returnAddress, is_priority: isPriority })
+    })
+    .then(res => res.json())
+    .then(data => {
+        if(data.status === 'success') window.location.reload();
+        else { alert("Erro ao agendar devolução."); document.body.style.cursor = 'default'; }
+    });
+}

@@ -177,6 +177,21 @@ class RouteStop(models.Model):
         ordering = ['motoboy', 'sequence']
 
     def __str__(self):
-        tipo = "Coleta" if self.stop_type == 'COLETA' else "Entrega"
-        local = self.service_order.origin_name if self.stop_type == 'COLETA' else self.destination.destination_name
+        if self.stop_type == 'COLETA':
+            tipo = "Coleta"
+            local = self.service_order.origin_name
+        elif self.stop_type == 'ENTREGA':
+            tipo = "Entrega"
+            local = self.destination.destination_name if self.destination else "Destino Indefinido"
+        elif self.stop_type == 'TRANSFERENCIA':
+            tipo = "Transferência"
+            # Usa o texto que guardámos no failure_reason como local
+            local = self.failure_reason if self.failure_reason else "Ponto de Encontro"
+        elif self.stop_type == 'DEVOLUCAO':
+            tipo = "Devolução"
+            local = self.failure_reason if self.failure_reason else "Local de Devolução"
+        else:
+            tipo = "Desconhecido"
+            local = "Desconhecido"
+            
         return f"{self.sequence}º Parada: {tipo} em {local} (OS {self.service_order.os_number})"

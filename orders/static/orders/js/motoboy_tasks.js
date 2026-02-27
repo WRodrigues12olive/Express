@@ -24,10 +24,17 @@ function renderList() {
         const paradasPendentes = os.stops.filter(s => !s.is_completed);
         const nextStop = paradasPendentes.length > 0 ? paradasPendentes[0] : null;
         
-        const isColeta = nextStop && nextStop.type === 'COLETA';
-        const iconBgClass = isColeta ? 'bg-warning bg-opacity-10' : 'bg-primary bg-opacity-10';
-        const iconColorClass = isColeta ? 'text-warning' : 'text-primary';
-        const iconClass = isColeta ? 'bi-box-seam' : 'bi-geo-alt';
+        // Lógica de cores e ícones atualizada
+        let iconBgClass, iconColorClass, iconClass;
+        if (nextStop && nextStop.type === 'COLETA') {
+            iconBgClass = 'bg-warning bg-opacity-10'; iconColorClass = 'text-warning'; iconClass = 'bi-box-seam';
+        } else if (nextStop && nextStop.type === 'ENTREGA') {
+            iconBgClass = 'bg-primary bg-opacity-10'; iconColorClass = 'text-primary'; iconClass = 'bi-geo-alt';
+        } else if (nextStop && nextStop.type === 'TRANSFERENCIA') {
+            iconBgClass = 'bg-danger bg-opacity-10'; iconColorClass = 'text-danger'; iconClass = 'bi-truck';
+        } else {
+            iconBgClass = 'bg-info bg-opacity-10'; iconColorClass = 'text-info'; iconClass = 'bi-arrow-return-left';
+        }
 
         const isLocked = index > 0;
 
@@ -47,6 +54,48 @@ function renderList() {
             ? `<div class="rounded-3 px-2 py-1 mb-2 d-inline-block small fw-bold w-100" style="background-color: #f3e8ff; color: #6b21a8; font-size: 0.7rem;"><i class="bi bi-diagram-3"></i> Múltiplas Entregas: Inclui ${os.child_numbers}</div>` 
             : '';
 
+        let nextStopHTML = '';
+        if (nextStop) {
+            if (nextStop.is_frozen) {
+                nextStopHTML = `
+                <div class="alert alert-danger py-2 mb-0 mt-2 small fw-bold text-center border-danger">
+                    <i class="bi bi-exclamation-triangle-fill"></i> ROTA SUSPENSA (Aguardando Socorro)
+                </div>`;
+            } else {
+                nextStopHTML = `
+                <div class="bg-slate-50 p-2 rounded-3 border border-light d-flex align-items-start gap-3 mt-2 ${isLocked ? 'grayscale' : ''}">
+                    <div class="${iconBgClass} rounded-circle d-flex align-items-center justify-content-center mt-1 flex-shrink-0" style="width: 28px; height: 28px;">
+                        <i class="bi ${iconClass} ${iconColorClass}"></i>
+                    </div>
+                    <div class="flex-grow-1 text-truncate">
+                        <p class="text-slate-400 fw-bold text-uppercase mb-0" style="font-size: 0.6rem; letter-spacing: 1px;">Próxima Ação: ${nextStop.type}</p>
+                        <p class="text-dark fw-bold text-truncate mb-0" style="font-size: 0.85rem;">${nextStop.name}</p>
+                        <p class="text-slate-500 text-truncate mb-0" style="font-size: 0.7rem;">${nextStop.address.split('-')[0]}</p>
+                    </div>
+                </div>`;
+            }
+        } else {
+            nextStopHTML = `<div class="alert alert-success py-2 mb-0 mt-2 small fw-bold text-center"><i class="bi bi-check-circle"></i> Rota Finalizada</div>`;
+        }
+
+        let actionBtnHTML = '';
+        if (isLocked) {
+            actionBtnHTML = `
+            <div class="w-100 py-2 mt-3 bg-secondary bg-opacity-10 text-secondary border border-secondary border-opacity-25 rounded-3 small fw-bold d-flex align-items-center justify-content-center gap-2">
+                <i class="bi bi-lock-fill"></i> Aguardando OS anterior
+            </div>`;
+        } else if (nextStop && nextStop.is_frozen) {
+            actionBtnHTML = `
+            <div class="w-100 py-2 mt-3 bg-danger text-white rounded-3 small fw-bold d-flex align-items-center justify-content-center gap-2 shadow-sm">
+                Ver Detalhes <i class="bi bi-chevron-right"></i>
+            </div>`;
+        } else {
+            actionBtnHTML = `
+            <div class="w-100 py-2 mt-3 bg-slate-900 text-white rounded-3 small fw-bold d-flex align-items-center justify-content-center gap-2 shadow-sm">
+                Iniciar Roteiro <i class="bi bi-chevron-right"></i>
+            </div>`;
+        }
+
         card.innerHTML = `
             ${mescladaBadge}
             <div class="d-flex justify-content-between align-items-start mb-2">
@@ -59,28 +108,8 @@ function renderList() {
                 <span class="small fw-bold text-slate-500" style="font-size: 0.75rem;">${entregasPendentes.length} entregas aqui</span>
             </div>
 
-            ${nextStop ? `
-            <div class="bg-slate-50 p-2 rounded-3 border border-light d-flex align-items-start gap-3 mt-2 ${isLocked ? 'grayscale' : ''}">
-                <div class="${iconBgClass} rounded-circle d-flex align-items-center justify-content-center mt-1 flex-shrink-0" style="width: 28px; height: 28px;">
-                    <i class="bi ${iconClass} ${iconColorClass}"></i>
-                </div>
-                <div class="flex-grow-1 text-truncate">
-                    <p class="text-slate-400 fw-bold text-uppercase mb-0" style="font-size: 0.6rem; letter-spacing: 1px;">Próxima Ação: ${nextStop.type}</p>
-                    <p class="text-dark fw-bold text-truncate mb-0" style="font-size: 0.85rem;">${nextStop.name}</p>
-                    <p class="text-slate-500 text-truncate mb-0" style="font-size: 0.7rem;">${nextStop.address.split('-')[0]}</p>
-                </div>
-            </div>
-            ` : `<div class="alert alert-success py-2 mb-0 mt-2 small fw-bold text-center"><i class="bi bi-check-circle"></i> Rota Finalizada</div>`}
-            
-            ${isLocked ? `
-            <div class="w-100 py-2 mt-3 bg-secondary bg-opacity-10 text-secondary border border-secondary border-opacity-25 rounded-3 small fw-bold d-flex align-items-center justify-content-center gap-2">
-                <i class="bi bi-lock-fill"></i> Aguardando OS anterior
-            </div>
-            ` : `
-            <div class="w-100 py-2 mt-3 bg-slate-900 text-white rounded-3 small fw-bold d-flex align-items-center justify-content-center gap-2 shadow-sm">
-                Iniciar Roteiro <i class="bi bi-chevron-right"></i>
-            </div>
-            `}
+            ${nextStopHTML}
+            ${actionBtnHTML}
         `;
         container.appendChild(card);
     });
@@ -104,8 +133,24 @@ function openOS(id) {
     const bottomAction = document.getElementById('exec-bottom-action');
 
     if (currentStop) {
-        const badgeClass = isDelivery ? 'bg-primary bg-opacity-10 text-primary' : 'bg-warning bg-opacity-10 text-warning';
-        const itemsTitle = isDelivery ? 'Itens para Entregar Aqui' : 'Itens para Coletar';
+        // Configuração dos Títulos dependendo da Ação
+        let itemsTitle = 'Itens para Coletar';
+        let btnText = 'Confirmar Coleta';
+        let badgeClass = 'bg-warning bg-opacity-10 text-warning';
+
+        if (currentStop.type === 'ENTREGA') {
+            itemsTitle = 'Itens para Entregar Aqui';
+            btnText = 'Confirmar Entrega';
+            badgeClass = 'bg-primary bg-opacity-10 text-primary';
+        } else if (currentStop.type === 'TRANSFERENCIA') {
+            itemsTitle = 'Carga a ser transferida';
+            btnText = 'Confirmar Encontro e Carga';
+            badgeClass = 'bg-danger bg-opacity-10 text-danger';
+        } else if (currentStop.type === 'DEVOLUCAO') {
+            itemsTitle = 'Carga a ser devolvida';
+            btnText = 'Confirmar Devolução';
+            badgeClass = 'bg-info bg-opacity-10 text-info';
+        }
         
         let itemsHTML = '<ul class="list-group list-group-flush mb-0">';
         currentStop.items_details.forEach(item => {
@@ -120,6 +165,9 @@ function openOS(id) {
         });
         itemsHTML += '</ul>';
         
+        // Ajuste no link de navegação para resolver problemas com endereços complexos
+        const navUrl = `http://maps.google.com/maps?q=${encodeURIComponent(currentStop.address)}`;
+
         cardContainer.innerHTML = `
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <span class="badge ${badgeClass} border fw-bold text-uppercase" style="font-size: 0.65rem;">Próxima Ação: ${currentStop.type}</span>
@@ -132,7 +180,7 @@ function openOS(id) {
                 <i class="bi bi-geo-alt fs-5 text-slate-400 mt-1"></i>
                 <div>
                     <p class="text-dark fw-bold mb-0" style="font-size: 0.85rem;">${currentStop.address}</p>
-                    ${currentStop.reference ? `<p class="badge bg-warning bg-opacity-10 text-warning border border-warning border-opacity-25 mt-1 mb-0 p-1 text-wrap text-start">Ref: ${currentStop.reference}</p>` : ''}
+                    ${currentStop.reference && currentStop.reference !== 'Sem referência' ? `<p class="badge bg-warning bg-opacity-10 text-warning border border-warning border-opacity-25 mt-1 mb-0 p-1 text-wrap text-start">Ref: ${currentStop.reference}</p>` : ''}
                 </div>
             </div>
 
@@ -146,13 +194,13 @@ function openOS(id) {
             <div class="bg-slate-50 p-3 rounded-4 border border-light mb-4 d-flex justify-content-between align-items-center">
                 <div>
                     <p class="text-slate-400 fw-bold text-uppercase mb-0" style="font-size: 0.65rem;">Contato no local</p>
-                    ${currentStop.contact ? `<p class="fw-bold text-dark mb-0">${currentStop.contact}</p>` : `<p class="fw-bold text-slate-400 mb-0">Não informado</p>`}
+                    ${currentStop.contact && currentStop.contact !== '--' ? `<p class="fw-bold text-dark mb-0">${currentStop.contact}</p>` : `<p class="fw-bold text-slate-400 mb-0">Não informado</p>`}
                 </div>
-                ${currentStop.contact ? `<a href="tel:${currentStop.contact.replace(/\D/g, '')}" class="btn btn-primary btn-sm rounded-pill fw-bold px-3 py-2 shadow-sm d-flex align-items-center gap-1"><i class="bi bi-telephone"></i> Ligar</a>` : ''}
+                ${currentStop.contact && currentStop.contact !== '--' ? `<a href="tel:${currentStop.contact.replace(/\D/g, '')}" class="btn btn-primary btn-sm rounded-pill fw-bold px-3 py-2 shadow-sm d-flex align-items-center gap-1"><i class="bi bi-telephone"></i> Ligar</a>` : ''}
             </div>
 
             <div class="d-flex gap-2">
-                <a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(currentStop.address)}" target="_blank" class="btn btn-light text-primary fw-bold w-50 py-2 d-flex justify-content-center align-items-center gap-2 border shadow-sm">
+                <a href="${navUrl}" target="_blank" class="btn btn-light text-primary fw-bold w-50 py-2 d-flex justify-content-center align-items-center gap-2 border shadow-sm">
                     <i class="bi bi-cursor"></i> Navegar
                 </a>
                 <button type="button" onclick="copiarReferencia('${currentStop.reference || ''}')" class="btn btn-light text-secondary fw-bold w-50 py-2 d-flex justify-content-center align-items-center gap-2 border shadow-sm">
@@ -161,16 +209,32 @@ function openOS(id) {
             </div>
         `;
 
-        const btnConfirmar = document.getElementById('btn-confirmar');
-        document.getElementById('btn-confirmar-text').innerText = `Confirmar ${currentStop.type === 'COLETA' ? 'Coleta' : 'Entrega'}`;
-        
-        if (isDelivery) {
-            btnConfirmar.className = "btn btn-primary w-100 py-3 rounded-4 fw-bold fs-6 text-white d-flex align-items-center justify-content-center gap-2 shadow-sm transition-transform";
+        const actionBtns = document.getElementById('action-buttons-container');
+        const frozenAlert = document.getElementById('frozen-alert-container');
+
+        if (currentStop.is_frozen) {
+            // Esconde os botões e mostra o alerta de Rota Suspensa
+            if(actionBtns) actionBtns.classList.add('d-none');
+            if(frozenAlert) frozenAlert.classList.remove('d-none');
         } else {
-            btnConfirmar.className = "btn btn-warning w-100 py-3 rounded-4 fw-bold fs-6 text-dark d-flex align-items-center justify-content-center gap-2 shadow-sm transition-transform";
+            // Mostra os botões normais
+            if(actionBtns) actionBtns.classList.remove('d-none');
+            if(frozenAlert) frozenAlert.classList.add('d-none');
+            
+            const btnConfirmar = document.getElementById('btn-confirmar');
+            document.getElementById('btn-confirmar-text').innerText = btnText;
+            
+            if (isDelivery) {
+                btnConfirmar.className = "btn btn-primary w-100 py-3 rounded-4 fw-bold fs-6 text-white d-flex align-items-center justify-content-center gap-2 shadow-sm transition-transform active:scale-95";
+            } else if (currentStop.type === 'TRANSFERENCIA' || currentStop.type === 'DEVOLUCAO') {
+                btnConfirmar.className = "btn btn-dark w-100 py-3 rounded-4 fw-bold fs-6 text-white d-flex align-items-center justify-content-center gap-2 shadow-sm transition-transform active:scale-95";
+            } else {
+                btnConfirmar.className = "btn btn-warning w-100 py-3 rounded-4 fw-bold fs-6 text-dark d-flex align-items-center justify-content-center gap-2 shadow-sm transition-transform active:scale-95";
+            }
+            
+            document.getElementById('form-confirmar-etapa').action = `/minhas-entregas/atualizar/${currentStop.id}/`;
         }
         
-        document.getElementById('form-confirmar-etapa').action = `/minhas-entregas/atualizar/${currentStop.id}/`;
         bottomAction.classList.remove('d-none');
 
     } else {
@@ -189,11 +253,31 @@ function openOS(id) {
 
     activeOs.stops.forEach((stop, index) => {
         const isCompleted = stop.is_completed;
+        const isFailed = stop.is_failed; // <-- Lemos se falhou
         const isCurrent = index === currentStopIndex;
         
-        const dotClass = isCompleted ? 'bg-success border-success' : (isCurrent ? 'bg-white border-primary border-3' : 'bg-slate-50 border-secondary border-2');
-        const iconHTML = isCompleted ? '<i class="bi bi-check text-white" style="font-size: 0.8rem;"></i>' : (isCurrent ? '<div class="bg-primary rounded-circle" style="width: 8px; height: 8px;"></div>' : '');
-        const typeBadge = stop.type === 'COLETA' ? 'bg-warning bg-opacity-10 text-warning' : 'bg-primary bg-opacity-10 text-primary';
+        // NOVO: Lógica de cores para o Visto Verde vs X Vermelho
+        let dotClass, iconHTML;
+        
+        if (isFailed) {
+            dotClass = 'bg-danger border-danger';
+            iconHTML = '<i class="bi bi-x text-white" style="font-size: 1rem;"></i>';
+        } else if (isCompleted) {
+            dotClass = 'bg-success border-success';
+            iconHTML = '<i class="bi bi-check text-white" style="font-size: 1rem;"></i>';
+        } else if (isCurrent) {
+            dotClass = 'bg-white border-primary border-3';
+            iconHTML = '<div class="bg-primary rounded-circle" style="width: 8px; height: 8px;"></div>';
+        } else {
+            dotClass = 'bg-slate-50 border-secondary border-2';
+            iconHTML = '';
+        }
+        
+        // Cores da badge da timeline dependendo do tipo da parada
+        let typeBadge = 'bg-primary bg-opacity-10 text-primary';
+        if (stop.type === 'COLETA') typeBadge = 'bg-warning bg-opacity-10 text-warning';
+        else if (stop.type === 'TRANSFERENCIA') typeBadge = 'bg-danger bg-opacity-10 text-danger';
+        else if (stop.type === 'DEVOLUCAO') typeBadge = 'bg-info bg-opacity-10 text-info';
 
         timeline.innerHTML += `
             <div class="d-flex gap-3 position-relative z-1 mb-4 ${isCompleted ? 'opacity-50' : ''}">
@@ -225,7 +309,7 @@ function closeOS() {
 }
 
 function copiarReferencia(texto) {
-    if (!texto || texto === 'None' || texto.trim() === '') {
+    if (!texto || texto === 'None' || texto.trim() === '' || texto === 'Sem referência') {
         showToast('Nenhuma referência disponível.', false);
         return;
     }
@@ -316,4 +400,3 @@ document.addEventListener('DOMContentLoaded', () => {
     sendHeartbeat();
     setInterval(sendHeartbeat, 60000);
 });
-

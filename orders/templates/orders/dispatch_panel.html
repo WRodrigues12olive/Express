@@ -319,14 +319,19 @@
                 
                 <p class="text-slate-500 small fw-bold text-uppercase mb-3">Qual decisão tomar na OS <span id="modalProblemOsNumber" class="text-danger"></span>?</p>
                 
-                <div class="d-flex flex-column gap-2">
-                    <button onclick="submitResolveAction('reactivate')" class="btn btn-success fw-bold py-3 shadow-sm d-flex justify-content-between align-items-center transition-all hover-scale">
-                        <span><i class="bi bi-play-circle fs-5 me-2 align-middle"></i> Ignorar / Reativar Rota</span>
+                <div class="d-flex flex-column gap-2">                   
+                    <button onclick="openReturnModal()" class="btn btn-info text-white fw-bold py-3 shadow-sm d-flex justify-content-between align-items-center transition-all hover-scale">
+                        <span><i class="bi bi-arrow-return-left fs-5 me-2 align-middle"></i> Falha na Entrega (Agendar Devolução)</span>
                         <i class="bi bi-chevron-right"></i>
                     </button>
-                    
+
+                    <button onclick="openTransferModal()" class="btn btn-primary fw-bold py-3 shadow-sm d-flex justify-content-between align-items-center transition-all hover-scale">
+                        <span><i class="bi bi-truck fs-5 me-2 align-middle"></i> Transferir Carga (Socorro / Quebra)</span>
+                        <i class="bi bi-chevron-right"></i>
+                    </button>
+
                     <button onclick="submitResolveAction('unassign')" class="btn btn-warning fw-bold py-3 shadow-sm d-flex justify-content-between align-items-center transition-all hover-scale">
-                        <span><i class="bi bi-arrow-return-left fs-5 me-2 align-middle"></i> Tirar do Motoboy (Voltar à Fila)</span>
+                        <span><i class="bi bi-arrow-counterclockwise fs-5 me-2 align-middle"></i> Tirar do Motoboy (Voltar à Fila)</span>
                         <i class="bi bi-chevron-right"></i>
                     </button>
                     
@@ -335,6 +340,125 @@
                         <i class="bi bi-chevron-right"></i>
                     </button>
                 </div>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="modal fade" id="transferRouteModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-0 rounded-4 shadow-lg">
+            <div class="modal-header bg-primary text-white border-0 rounded-top-4">
+                <h5 class="modal-title fw-bold"><i class="bi bi-truck"></i> Transferir Carga (Socorro)</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-4 bg-slate-50">
+                <p class="small text-muted mb-4">Escolha o motoboy socorrista e preencha os dados do local de encontro onde a carga será transferida.</p>
+                
+                <div class="mb-4 bg-white p-3 rounded-3 border shadow-sm">
+                    <label class="form-label fw-bold small text-primary mb-2">Novo Motoboy (Socorrista)</label>
+                    <select id="transferMotoboySelect" class="form-select border-primary shadow-sm fw-bold">
+                        <option value="">Selecione um técnico disponível...</option>
+                        {% for data in motoboy_data %}
+                            {% if data.is_online %}
+                                <option value="{{ data.profile.id }}">{{ data.profile.user.first_name }}</option>
+                            {% endif %}
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <label class="form-label fw-bold small text-muted mb-1">CEP</label>
+                        <input type="text" id="transferCep" class="form-control shadow-sm border-primary" placeholder="00000-000" onblur="buscarCepTransferencia(this.value)">
+                    </div>
+                    <div class="col-md-7">
+                        <label class="form-label fw-bold small text-muted mb-1">Rua / Logradouro</label>
+                        <input type="text" id="transferStreet" class="form-control shadow-sm">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label fw-bold small text-muted mb-1">Número</label>
+                        <input type="text" id="transferNumber" class="form-control shadow-sm border-primary">
+                    </div>
+                    
+                    <div class="col-md-5">
+                        <label class="form-label fw-bold small text-muted mb-1">Complemento</label>
+                        <input type="text" id="transferComplement" class="form-control shadow-sm" placeholder="Ex: Posto de Combustível">
+                    </div>
+                    <div class="col-md-7">
+                        <label class="form-label fw-bold small text-muted mb-1">Bairro</label>
+                        <input type="text" id="transferDistrict" class="form-control shadow-sm">
+                    </div>
+
+                    <div class="col-md-9">
+                        <label class="form-label fw-bold small text-muted mb-1">Cidade</label>
+                        <input type="text" id="transferCity" class="form-control shadow-sm">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label fw-bold small text-muted mb-1">UF</label>
+                        <input type="text" id="transferState" class="form-control shadow-sm" maxlength="2" placeholder="Ex: RS">
+                    </div>
+                </div>
+
+                <button type="button" class="btn btn-primary text-white fw-bold w-100 shadow-sm mt-4 py-3" onclick="submitTransferRoute()">Confirmar Transferência</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="createReturnModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-0 rounded-4 shadow-lg">
+            <div class="modal-header bg-info text-white border-0 rounded-top-4">
+                <h5 class="modal-title fw-bold"><i class="bi bi-arrow-return-left"></i> Agendar Devolução</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-4 bg-slate-50">
+                <p class="small text-muted mb-4">A paragem atual será marcada como "Falha". Preencha os dados do local onde o pacote deverá ser devolvido.</p>
+                
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <label class="form-label fw-bold small text-muted mb-1">CEP</label>
+                        <input type="text" id="returnCep" class="form-control shadow-sm border-info" placeholder="00000-000" onblur="buscarCepDevolucao(this.value)">
+                    </div>
+                    <div class="col-md-7">
+                        <label class="form-label fw-bold small text-muted mb-1">Rua / Logradouro</label>
+                        <input type="text" id="returnStreet" class="form-control shadow-sm">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label fw-bold small text-muted mb-1">Número</label>
+                        <input type="text" id="returnNumber" class="form-control shadow-sm border-info">
+                    </div>
+                    
+                    <div class="col-md-5">
+                        <label class="form-label fw-bold small text-muted mb-1">Complemento</label>
+                        <input type="text" id="returnComplement" class="form-control shadow-sm" placeholder="Ex: Galpão 3, Sala 12">
+                    </div>
+                    <div class="col-md-7">
+                        <label class="form-label fw-bold small text-muted mb-1">Bairro</label>
+                        <input type="text" id="returnDistrict" class="form-control shadow-sm">
+                    </div>
+
+                    <div class="col-md-9">
+                        <label class="form-label fw-bold small text-muted mb-1">Cidade</label>
+                        <input type="text" id="returnCity" class="form-control shadow-sm">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label fw-bold small text-muted mb-1">UF</label>
+                        <input type="text" id="returnState" class="form-control shadow-sm" maxlength="2" placeholder="Ex: RS">
+                    </div>
+                </div>
+
+                <div class="mt-4 mb-2 p-3 bg-white border rounded-3 shadow-sm d-flex align-items-center justify-content-between">
+                    <div>
+                        <h6 class="mb-1 fw-bold text-dark"><i class="bi bi-lightning-charge text-warning"></i> Devolução Prioritária?</h6>
+                        <p class="mb-0 small text-muted">Se ativado, o motoboy fará a devolução <b>logo após</b> a entrega que ele está fazendo no momento, furando a fila das restantes.</p>
+                    </div>
+                    <div class="form-check form-switch fs-4 mb-0">
+                        <input class="form-check-input" type="checkbox" id="returnPriority" role="switch">
+                    </div>
+                </div>
+
+                <button type="button" class="btn btn-info text-white fw-bold w-100 shadow-sm mt-2 py-2" onclick="submitCreateReturn()">Confirmar Devolução e Avançar Rota</button>
             </div>
         </div>
     </div>
