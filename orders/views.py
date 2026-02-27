@@ -186,37 +186,29 @@ def dispatch_dashboard_view(request):
     if request.user.type != 'DISPATCHER' and not request.user.is_superuser:
         return redirect('root')
 
-    # 1. Coluna 2: Busca OS Pendentes (Aguardando Atribuição)
     pending_orders = ServiceOrder.objects.filter(status='PENDENTE').order_by('-priority', 'created_at')
     
-    # 2. Busca Motoboys e prepara os dados
     from logistics.models import MotoboyProfile
     motoboys = MotoboyProfile.objects.all()
     
     motoboy_data = []
     for mb in motoboys:
-        # VERIFICAÇÃO DE ONLINE RESTAURADA: Checa no cache se o usuário foi visto recentemente
         last_seen = cache.get(f'seen_{mb.user.id}')
-        
-        # O motoboy só aparece como "Livre/Online" se tiver com perfil liberado (is_available) 
-        # E tiver acessado o sistema nos últimos minutos (last_seen)
         is_online = mb.is_available and bool(last_seen)
 
-        # Pega as OS ativas especificamente deste motoboy
-        ativas = mb.route_stops.filter(is_completed=False).order_by('sequence')
+        # CORREÇÃO: Esconde a paragem "Aguardando Socorro" do motoboy antigo no painel do despachante!
+        ativas = mb.route_stops.filter(is_completed=False).exclude(failure_reason__icontains='[AGUARDANDO SOCORRO]').order_by('sequence')
         
         motoboy_data.append({
             'profile': mb,
             'is_online': is_online,
             'load': ativas.count(),
-            'max_load': 10, # Capacidade fictícia
+            'max_load': 10,
             'active_stops': ativas,
         })
         
-    # Ordena: Motoboys Online/Ativos primeiro na lista
     motoboy_data.sort(key=lambda x: x['is_online'], reverse=True)
 
-    # 3. Métricas do Topo
     total_ativas = sum(mb['load'] for mb in motoboy_data)
     total_ocorrencias = ServiceOrder.objects.filter(status='OCORRENCIA').count()
 
@@ -317,24 +309,28 @@ def motoboy_tasks_view(request):
             cnh_number=f"Pendente_{request.user.id}", category='TELE', is_available=False
         )
 
-    cnh_invalida = not perfil.cnh_number or 'Pendente' in perfil.cnh_number
-    placa_invalida = not perfil.vehicle_plate or 'Pendente' in perfil.vehicle_plate
-
-    if cnh_invalida or placa_invalida:
+    if not perfil.cnh_number or 'Pendente' in perfil.cnh_number or not perfil.vehicle_plate or 'Pendente' in perfil.vehicle_plate:
         return redirect('motoboy_profile')
 
-    # CORREÇÃO: Adicionado 'OCORRENCIA' para a OS não sumir da tela do motoboy
-    ativas_qs = ServiceOrder.objects.filter(
+    # 1. Encontra TODAS as OS que têm pelo menos UMA parada para ESTE motoboy específico
+    pending_os_ids = RouteStop.objects.filter(
         motoboy=perfil,
+        is_completed=False
+    ).values_list('service_order_id', flat=True)
+
+    # 2. Busca as OS baseadas nas paradas pendentes
+    ativas_qs = ServiceOrder.objects.filter(
+        Q(id__in=pending_os_ids) | Q(child_orders__id__in=pending_os_ids),
         status__in=['ACEITO', 'COLETADO', 'OCORRENCIA'], 
         parent_os__isnull=True
-    ).order_by('created_at')
+    ).distinct().order_by('created_at')
 
     ativas_data = []
     for os in ativas_qs:
-        # Pega as paradas da OS principal e das filhas agrupadas nela
+        # 3. MANDA PARA A TELA SÓ AS PARADAS DESTE MOTOBOY (O novo não vê o que o antigo já fez)
         stops = RouteStop.objects.filter(
-            Q(service_order=os) | Q(service_order__parent_os=os)
+            (Q(service_order=os) | Q(service_order__parent_os=os)),
+            motoboy=perfil
         ).order_by('sequence')
         
         filhas = os.child_orders.all()
@@ -347,22 +343,15 @@ def motoboy_tasks_view(request):
         })
 
     entregas_concluidas_hoje = RouteStop.objects.filter(
-        motoboy=perfil,
-        stop_type='ENTREGA',
-        is_completed=True,
-        is_failed=False, 
-        completed_at__date=timezone.now().date()
+        motoboy=perfil, stop_type='ENTREGA', is_completed=True, is_failed=False, completed_at__date=timezone.now().date()
     ).count()
 
-    historico = ServiceOrder.objects.filter(
-        motoboy=perfil,
-        status__in=['ENTREGUE', 'CANCELADO']
-    ).order_by('-created_at')[:10]
+    historico = ServiceOrder.objects.filter(motoboy=perfil, status__in=['ENTREGUE', 'CANCELADO']).order_by('-created_at')[:10]
 
     context = {
         'ativas_data': ativas_data,
         'historico': historico,
-        'entregas_concluidas': entregas_concluidas_hoje, # Enviando para o HTML
+        'entregas_concluidas': entregas_concluidas_hoje,
     }
     return render(request, 'orders/motoboy_tasks.html', context)
 
@@ -463,52 +452,64 @@ def reorder_stops_view(request):
 @login_required
 @require_POST
 def motoboy_update_status(request, stop_id):
-    """ O motoboy agora confirma a PARADA (RouteStop) específica """
     if request.user.type != 'MOTOBOY':
         return redirect('root')
 
-    # Pega exatamente a parada que ele clicou
     current_stop = get_object_or_404(RouteStop, id=stop_id, motoboy__user=request.user)
 
     if not current_stop.is_completed:
         
-        # 1. SE FOR ENTREGA: Salva os dados do Comprovante (POD)
+        # Lógica de salvar foto da entrega...
         if current_stop.stop_type == 'ENTREGA' and current_stop.destination:
             dest = current_stop.destination
-            
-            # Pega o nome digitado e a foto enviada pelo formulário
             receiver_name = request.POST.get('receiver_name')
             proof_photo = request.FILES.get('proof_photo')
-            
-            if receiver_name:
-                dest.receiver_name = receiver_name
-            if proof_photo:
-                dest.proof_photo = proof_photo
-                
+            if receiver_name: dest.receiver_name = receiver_name
+            if proof_photo: dest.proof_photo = proof_photo
             dest.is_delivered = True
             dest.delivered_at = timezone.now()
             dest.save()
 
-        # 2. Conclui a Etapa
+        # Conclui a parada do motoboy atual
         current_stop.is_completed = True
         current_stop.completed_at = timezone.now()
         current_stop.save()
 
-        # 3. Atualiza o Status Geral da OS
         os = current_stop.service_order
+        
+        # --- A MÁGICA: LIBERA O MOTOBOY ANTIGO ---
+        # Se o motoboy NOVO confirmou que pegou a carga no encontro, o ANTIGO é dispensado.
+        if current_stop.stop_type == 'TRANSFERENCIA':
+            RouteStop.objects.filter(
+                Q(service_order=os) | Q(service_order__parent_os=os),
+                failure_reason__icontains="[AGUARDANDO SOCORRO]"
+            ).update(is_completed=True, completed_at=timezone.now())
+
         if current_stop.stop_type == 'COLETA':
             os.status = 'COLETADO'
             os.save()
             messages.success(request, f"Coleta confirmada!")
             
-        elif current_stop.stop_type == 'ENTREGA':
-            paradas_restantes = os.stops.filter(is_completed=False).count()
+        elif current_stop.stop_type in ['ENTREGA', 'TRANSFERENCIA']:
+            # Verifica paradas SOMENTE deste motoboy para decidir se finalizou a rota dele
+            paradas_restantes = RouteStop.objects.filter(
+                Q(service_order=os) | Q(service_order__parent_os=os),
+                motoboy=current_stop.motoboy,
+                is_completed=False
+            ).count()
+            
             if paradas_restantes == 0:
-                os.status = 'ENTREGUE'
-                os.save()
-                messages.success(request, f"OS finalizada com sucesso!")
+                # Só finaliza a OS no painel se NINGUÉM mais tiver paradas (nem o antigo, nem o novo)
+                total_geral_restantes = RouteStop.objects.filter(
+                    Q(service_order=os) | Q(service_order__parent_os=os), is_completed=False
+                ).count()
+                
+                if total_geral_restantes == 0:
+                    os.status = 'ENTREGUE'
+                    os.save()
+                messages.success(request, f"Todas as suas tarefas desta OS foram concluídas!")
             else:
-                messages.success(request, f"Entrega confirmada! Partindo para o próximo destino.")
+                messages.success(request, f"Etapa confirmada! Partindo para o próximo destino.")
 
     return redirect('motoboy_tasks')
 
@@ -649,7 +650,6 @@ def resolve_os_problem(request, os_id):
 @login_required
 @require_POST
 def transfer_route_view(request, os_id):
-    """ Transfere as paragens pendentes para outro motoboy """
     if request.user.type != 'DISPATCHER' and not request.user.is_superuser:
         return JsonResponse({'status': 'error', 'message': 'Sem permissão.'}, status=403)
     
@@ -657,42 +657,63 @@ def transfer_route_view(request, os_id):
     new_motoboy_id = data.get('new_motoboy_id')
     transfer_address = data.get('transfer_address', 'Local de Encontro não especificado')
 
-    os_root = get_object_or_404(ServiceOrder, id=os_id)
-    root_os = os_root.parent_os or os_root
-    grouped_orders = ServiceOrder.objects.filter(Q(id=root_os.id) | Q(parent_os=root_os))
+    os_root = get_object_or_404(ServiceOrder, id=os_id).parent_os or get_object_or_404(ServiceOrder, id=os_id)
+    grouped_orders = ServiceOrder.objects.filter(Q(id=os_root.id) | Q(parent_os=os_root))
     
     from logistics.models import MotoboyProfile
     from orders.models import RouteStop
     new_motoboy = get_object_or_404(MotoboyProfile, id=new_motoboy_id)
 
     with transaction.atomic():
-        pending_stops = RouteStop.objects.filter(
+        first_pending = RouteStop.objects.filter(
             service_order__in=grouped_orders,
             is_completed=False
-        ).order_by('sequence')
+        ).order_by('sequence').first()
 
-        last_seq = new_motoboy.route_stops.filter(is_completed=False).count()
+        if not first_pending:
+            return JsonResponse({'status': 'error', 'message': 'Nenhuma parada para transferir.'})
 
-        # 1. Cria a paragem de transferência
-        last_seq += 1
+        old_motoboy = first_pending.motoboy
+
+        # 1. Trava o celular do motoboy antigo na tela de "Aguardando Socorro"
+        if old_motoboy and old_motoboy != new_motoboy:
+            RouteStop.objects.create(
+                service_order=os_root,
+                motoboy=old_motoboy,
+                stop_type='TRANSFERENCIA',
+                sequence=99, 
+                failure_reason="[AGUARDANDO SOCORRO] Veículo avariado."
+            )
+
+        # 2. Abre espaço na sequência para a nova Transferência
+        seq_transf = first_pending.sequence
+        RouteStop.objects.filter(
+            service_order__in=grouped_orders, is_completed=False
+        ).exclude(failure_reason__icontains="[AGUARDANDO SOCORRO]").update(sequence=F('sequence') + 1)
+
+        # 3. Cria o "Ponto de Encontro" para o NOVO motoboy ir buscar os itens
         RouteStop.objects.create(
-            service_order=root_os,
-            motoboy=new_motoboy,
-            stop_type='TRANSFERENCIA',
-            sequence=last_seq,
-            failure_reason=f"Encontro: {transfer_address}"
+            service_order=os_root, motoboy=new_motoboy, stop_type='TRANSFERENCIA',
+            sequence=seq_transf, failure_reason=f"Encontro: {transfer_address}"
         )
 
-        # 2. Move as paradas para o novo motoboy
-        for stop in pending_stops:
-            last_seq += 1
-            stop.motoboy = new_motoboy
-            stop.sequence = last_seq
-            stop.save()
+        # 4. Transfere as entregas pendentes para o novo e limpa os erros da moto velha
+        pending_real_stops = RouteStop.objects.filter(
+            service_order__in=grouped_orders, is_completed=False
+        ).exclude(failure_reason__icontains="[AGUARDANDO SOCORRO]").exclude(failure_reason__icontains="Encontro:")
+
+        pending_real_stops.update(motoboy=new_motoboy)
         
+        for stop in pending_real_stops:
+            if "avariado" in stop.failure_reason or "OCORRÊNCIA" in stop.failure_reason:
+                stop.failure_reason = ""
+                stop.save()
+
+        # 5. Corrige o status e Evita o Bug de Memória do Django!
         grouped_orders.update(motoboy=new_motoboy, status='ACEITO')
-        root_os.operational_notes += f"\n[🚨 SOCORRO] Carga transferida para {new_motoboy.user.first_name}. Ponto de encontro: {transfer_address}"
-        root_os.save()
+        os_root.status = 'ACEITO' # <-- SALVA O STATUS CORRETO NA MEMÓRIA ANTES DO SAVE DO HISTÓRICO
+        os_root.operational_notes += f"\n[🚨 SOCORRO] Carga transferida para {new_motoboy.user.first_name}. Ponto de encontro: {transfer_address}"
+        os_root.save()
 
     return JsonResponse({'status': 'success'})
 

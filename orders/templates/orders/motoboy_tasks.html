@@ -216,7 +216,7 @@
                     sequence: {{ stop.sequence }},
                     is_completed: {{ stop.is_completed|yesno:"true,false" }},
                     is_failed: {{ stop.is_failed|yesno:"true,false" }},
-                    is_frozen: {% if stop.failure_reason and not stop.is_completed %}true{% else %}false{% endif %},
+                    is_frozen: {% if stop.failure_reason and 'Encontro:' not in stop.failure_reason and 'Devolver em:' not in stop.failure_reason and not stop.is_completed %}true{% else %}false{% endif %},
                     
                     // Lógica atualizada para lidar com as 4 opções
                     name: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_name|escapejs }}{% elif stop.stop_type == 'ENTREGA' %}{{ stop.destination.destination_name|escapejs }}{% elif stop.stop_type == 'TRANSFERENCIA' %}Ponto de Encontro (Socorro){% else %}Local de Devolução{% endif %}",
