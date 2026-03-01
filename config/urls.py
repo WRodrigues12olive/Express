@@ -32,4 +32,5 @@ urlpatterns = [
     path('painel-despacho/resolver/<int:os_id>/', resolve_os_problem, name='resolve_os_problem'),
     path('painel-despacho/transferir/<int:os_id>/', views.transfer_route_view, name='transfer_route'),
     path('painel-despacho/devolver/<int:os_id>/', views.create_return_view, name='create_return'),
+    path('occurrence/<int:occurrence_id>/resolve/', views.resolve_occurrence_view, name='resolve_occurrence')
 ]

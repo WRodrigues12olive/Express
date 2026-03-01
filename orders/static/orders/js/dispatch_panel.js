@@ -52,72 +52,11 @@ setInterval(updateSLAs, 60000);
 setTimeout(updateSLAs, 1000);
 
 // ====================================================
-// MODAL DE RESOLUÇÃO DE PROBLEMAS E ATRIBUIÇÃO
+// MODAL DETALHES E ATRIBUIÇÃO (OS AGUARDANDO)
 // ====================================================
-let problemOsId = null;
 let currentModalOsId = null;
-let transferBeforePickup = false; // true quando o problema ocorreu antes da coleta
 
-function abrirModalResolver(osId, osNumber, notes, stopType = null) {
-    problemOsId = osId;
-    // Se a ocorrência veio de uma parada de COLETA, entendemos que o veículo estragou antes de coletar
-    transferBeforePickup = (stopType === 'COLETA');
-
-    document.getElementById('modalProblemOsNumber').innerText = osNumber;
-    document.getElementById('modalProblemNotes').innerText = notes || "Nenhuma observação registrada pelo motoboy.";
-    
-    var modal = new bootstrap.Modal(document.getElementById('resolveProblemModal'));
-    modal.show();
-}
-
-function submitResolveAction(action) {
-    if (!problemOsId) return;
-    
-    if (action === 'cancel') {
-        if(confirm("Tem a certeza que deseja CANCELAR esta OS? A empresa será notificada.")) {
-            document.body.style.cursor = 'wait';
-            fetch(`/os/${problemOsId}/cancelar/`, {
-                method: 'POST',
-                headers: {'X-CSRFToken': getCSRFToken()}
-            }).then(res => window.location.reload());
-        }
-        return;
-    }
-
-    document.body.style.cursor = 'wait';
-    fetch(`/painel-despacho/resolver/${problemOsId}/`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': getCSRFToken()
-        },
-        body: JSON.stringify({ action: action })
-    }).then(res => window.location.reload());
-}
-
-function assignMotoboySecurely(osId, motoboyId) {
-    document.body.style.cursor = 'wait';
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = `/painel-despacho/atribuir/${osId}/`;
-    
-    const inputCsrf = document.createElement('input');
-    inputCsrf.type = 'hidden';
-    inputCsrf.name = 'csrfmiddlewaretoken';
-    inputCsrf.value = getCSRFToken();
-    form.appendChild(inputCsrf);
-    
-    const inputMotoboy = document.createElement('input');
-    inputMotoboy.type = 'hidden';
-    inputMotoboy.name = 'motoboy_id';
-    inputMotoboy.value = motoboyId;
-    form.appendChild(inputMotoboy);
-    
-    document.body.appendChild(form);
-    form.submit();
-}
-
-function openDispatchModal(id, number, status, company, priority, date, originName, originAddress, groupIds = null, groupNumbers = null) {
+function openDispatchModal(id, number, status, company, priority, date, originName, originAddress, notes, groupIds = null, groupNumbers = null) {
     currentModalOsId = id;
     document.getElementById('modalDispOsNumber').innerText = number;
     document.getElementById('modalDispOsStatus').innerText = status;
@@ -127,9 +66,22 @@ function openDispatchModal(id, number, status, company, priority, date, originNa
     document.getElementById('modalDispOriginName').innerText = originName;
     document.getElementById('modalDispOriginAddress').innerText = originAddress;
 
-    // Bloco de informações de grupo / mescla (opcional)
+    const notesContainer = document.getElementById('modalDispNotesContainer');
+    const notesElement = document.getElementById('modalDispNotes');
+    
+    if (notesContainer && notesElement) {
+        if (notes && notes.trim() !== '' && notes !== 'None') {
+            notesElement.innerText = notes;
+            notesContainer.classList.remove('d-none');
+        } else {
+            notesElement.innerText = '';
+            notesContainer.classList.add('d-none');
+        }
+    }
+    
     const groupBox = document.getElementById('modalGroupBox');
     const groupContent = document.getElementById('modalGroupContent');
+    
     if (groupBox && groupContent) {
         const hasGroup = groupIds && groupIds.trim() !== '';
         if (!hasGroup) {
@@ -143,18 +95,19 @@ function openDispatchModal(id, number, status, company, priority, date, originNa
             ids.forEach((cid, idx) => {
                 const num = numbers[idx] || '';
                 html += `
-                    <div class="d-flex justify-content-between align-items-center mb-1">
-                        <span class="small fw-bold text-slate-600">OS ${num || cid}</span>
+                    <div class="bg-white border border-warning border-opacity-25 p-2 rounded-3 d-flex justify-content-between align-items-center shadow-sm mb-2">
+                        <span class="small fw-bold text-dark d-flex align-items-center gap-2">
+                            <i class="bi bi-box-seam text-warning"></i> OS ${num || cid}
+                        </span>
                         <button type="button"
-                                class="btn btn-outline-danger btn-xs border-0 text-uppercase fw-bold px-2 py-0"
-                                style="font-size: 0.65rem;"
+                                class="btn btn-outline-danger btn-sm text-uppercase fw-bold px-3 py-1 transition-all"
+                                style="font-size: 0.7rem;"
                                 onclick="desfazerMescla('${cid}')">
-                            <i class="bi bi-arrow-counterclockwise"></i> Desfazer
+                            <i class="bi bi-link-45deg fs-6 align-middle"></i> Desvincular
                         </button>
                     </div>
                 `;
             });
-
             groupContent.innerHTML = html;
             groupBox.classList.remove('d-none');
         }
@@ -188,6 +141,85 @@ function confirmCancelOS() {
             else alert('Erro: A OS já está em andamento ou você não tem permissão.');
         });
     }
+}
+
+// ====================================================
+// NOVO SISTEMA DE OCORRÊNCIAS (FASE 4)
+// ====================================================
+function openDecisionModal(occurrenceId, causaText, obsText, fotoUrl) {
+    document.getElementById('currentOccurrenceId').value = occurrenceId;
+    document.getElementById('decCausa').innerText = causaText;
+    document.getElementById('decObs').innerText = obsText || 'Sem observações.';
+    
+    const fotoBox = document.getElementById('decFotoBox');
+    const fotoLink = document.getElementById('decFotoLink');
+    
+    if (fotoUrl && fotoUrl !== 'None' && fotoUrl !== '') {
+        fotoLink.href = fotoUrl;
+        fotoBox.classList.remove('d-none');
+    } else {
+        fotoBox.classList.add('d-none');
+    }
+
+    document.getElementById('transferDecisionBox').classList.add('d-none');
+    
+    new bootstrap.Modal(document.getElementById('decisionModal')).show();
+}
+
+function toggleTransferBox() {
+    const box = document.getElementById('transferDecisionBox');
+    box.classList.toggle('d-none');
+}
+
+function submitDecision(acao) {
+    const occId = document.getElementById('currentOccurrenceId').value;
+    
+    fetch(`/orders/occurrence/${occId}/resolve/`, { 
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCSRFToken() // <-- Usando a função mais segura
+        },
+        body: JSON.stringify({ acao: acao })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if(data.status === 'success') {
+            window.location.reload(); 
+        } else {
+            alert('Erro: ' + data.message);
+        }
+    });
+}
+
+function submitTransfer() {
+    const occId = document.getElementById('currentOccurrenceId').value;
+    const motoboyId = document.getElementById('socorristaSelect').value;
+    const local = document.getElementById('localEncontro').value;
+    
+    if(!motoboyId) { alert("Selecione o motoboy socorrista."); return; }
+    
+    fetch(`/orders/occurrence/${occId}/resolve/`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCSRFToken() // <-- Usando a função mais segura
+        },
+        body: JSON.stringify({ 
+            acao: 'TRANSFERIR_MOTOBOY',
+            novo_motoboy_id: motoboyId,
+            local_encontro: local
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if(data.status === 'success') {
+            alert('Transferência executada com segurança!');
+            window.location.reload();
+        } else {
+            alert('Erro: ' + data.message);
+        }
+    });
 }
 
 // ====================================================
@@ -245,10 +277,7 @@ function dropMerge(ev, targetOsId) {
 
 function desfazerMescla(childOsId) {
     if (!childOsId) return;
-
-    if (!confirm("⚠️ Deseja DESFAZER a mescla desta OS e devolvê-la para a fila como independente?")) {
-        return;
-    }
+    if (!confirm("⚠️ Deseja DESFAZER a mescla desta OS e devolvê-la para a fila como independente?")) return;
 
     document.body.style.cursor = 'wait';
 
@@ -266,17 +295,36 @@ function desfazerMescla(childOsId) {
     })
     .then(data => {
         document.body.style.cursor = 'default';
-        if (data.status === 'success') {
-            window.location.reload();
-        } else {
-            alert("Erro do sistema: " + (data.message || 'Falha ao desfazer mescla.'));
-        }
+        if (data.status === 'success') window.location.reload();
+        else alert("Erro do sistema: " + (data.message || 'Falha ao desfazer mescla.'));
     })
     .catch(err => {
         document.body.style.cursor = 'default';
         alert("Falha ao desfazer mescla: " + err.message);
         console.error(err);
     });
+}
+
+function assignMotoboySecurely(osId, motoboyId) {
+    document.body.style.cursor = 'wait';
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = `/painel-despacho/atribuir/${osId}/`;
+    
+    const inputCsrf = document.createElement('input');
+    inputCsrf.type = 'hidden';
+    inputCsrf.name = 'csrfmiddlewaretoken';
+    inputCsrf.value = getCSRFToken();
+    form.appendChild(inputCsrf);
+    
+    const inputMotoboy = document.createElement('input');
+    inputMotoboy.type = 'hidden';
+    inputMotoboy.name = 'motoboy_id';
+    inputMotoboy.value = motoboyId;
+    form.appendChild(inputMotoboy);
+    
+    document.body.appendChild(form);
+    form.submit();
 }
 
 // ====================================================
@@ -321,7 +369,6 @@ function fetchAndRenderStops(osId) {
             onStart: function() { isInteracting = true; },
             onEnd: function() {
                 isInteracting = false;
-                
                 const items = Array.from(list.children);
 
                 // Regra de negócio: COLETA deve ser sempre a primeira parada na ordenação
@@ -374,14 +421,13 @@ document.addEventListener('mousedown', () => isInteracting = true);
 document.addEventListener('mouseup', () => isInteracting = false);
 document.addEventListener('dragstart', () => isInteracting = true);
 document.addEventListener('dragend', () => isInteracting = false);
-document.getElementById('dispatchOsModal')?.addEventListener('show.bs.modal', () => isModalOpen = true);
-document.getElementById('resolveProblemModal')?.addEventListener('show.bs.modal', () => isModalOpen = true);
-document.getElementById('transferRouteModal')?.addEventListener('show.bs.modal', () => isModalOpen = true);
-document.getElementById('createReturnModal')?.addEventListener('show.bs.modal', () => isModalOpen = true);
-document.getElementById('dispatchOsModal')?.addEventListener('hidden.bs.modal', () => isModalOpen = false);
-document.getElementById('resolveProblemModal')?.addEventListener('hidden.bs.modal', () => isModalOpen = false);
-document.getElementById('transferRouteModal')?.addEventListener('hidden.bs.modal', () => isModalOpen = false);
-document.getElementById('createReturnModal')?.addEventListener('hidden.bs.modal', () => isModalOpen = false);
+
+// Atualiza para incluir o novo decisionModal
+const modalsIds = ['dispatchOsModal', 'resolveProblemModal', 'transferRouteModal', 'createReturnModal', 'decisionModal'];
+modalsIds.forEach(id => {
+    document.getElementById(id)?.addEventListener('show.bs.modal', () => isModalOpen = true);
+    document.getElementById(id)?.addEventListener('hidden.bs.modal', () => isModalOpen = false);
+});
 
 function autoRefreshDashboard() {
     if (isInteracting || isModalOpen) return; 
@@ -402,29 +448,65 @@ function autoRefreshDashboard() {
 }
 setInterval(autoRefreshDashboard, 10000);
 
+
 // ====================================================
-// TRANSFERÊNCIA E DEVOLUÇÃO (SOCORRO)
+// SISTEMA LEGADO (MANTIDO PARA COMPATIBILIDADE DE OS ANTIGAS)
 // ====================================================
+let problemOsId = null;
+let transferBeforePickup = false;
+
+function abrirModalResolver(osId, osNumber, notes, stopType = null) {
+    problemOsId = osId;
+    transferBeforePickup = (stopType === 'COLETA');
+
+    document.getElementById('modalProblemOsNumber').innerText = osNumber;
+    document.getElementById('modalProblemNotes').innerText = notes || "Nenhuma observação registrada pelo motoboy.";
+    
+    var modal = new bootstrap.Modal(document.getElementById('resolveProblemModal'));
+    modal.show();
+}
+
+function submitResolveAction(action) {
+    if (!problemOsId) return;
+    
+    if (action === 'cancel') {
+        if(confirm("Tem a certeza que deseja CANCELAR esta OS? A empresa será notificada.")) {
+            document.body.style.cursor = 'wait';
+            fetch(`/os/${problemOsId}/cancelar/`, {
+                method: 'POST',
+                headers: {'X-CSRFToken': getCSRFToken()}
+            }).then(res => window.location.reload());
+        }
+        return;
+    }
+
+    document.body.style.cursor = 'wait';
+    fetch(`/painel-despacho/resolver/${problemOsId}/`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCSRFToken()
+        },
+        body: JSON.stringify({ action: action })
+    }).then(res => window.location.reload());
+}
+
 function openTransferModal() {
     var resolveModal = bootstrap.Modal.getInstance(document.getElementById('resolveProblemModal'));
     if(resolveModal) resolveModal.hide();
 
-    // Ajusta a interface conforme o momento da quebra (antes ou depois da coleta)
     const addrBox = document.getElementById('transferAddressBox');
     const intro = document.getElementById('transferIntroText');
 
     if (addrBox && intro) {
         if (transferBeforePickup) {
-            // Antes da coleta: esconde campos de endereço e explica que o novo motoboy irá ao local original
             addrBox.classList.add('d-none');
             intro.innerText = "Veículo avariado antes da coleta. O novo motoboy irá direto ao endereço original da OS para buscar a carga.";
         } else {
-            // Depois da coleta: mostra campos para definir ponto de encontro
             addrBox.classList.remove('d-none');
             intro.innerText = "Escolha o motoboy socorrista e preencha os dados do local de encontro onde a carga será transferida.";
         }
     }
-
     var transferModal = new bootstrap.Modal(document.getElementById('transferRouteModal'));
     transferModal.show();
 }
@@ -483,8 +565,6 @@ function submitTransferRoute() {
     if (!newMotoboyId) { alert("⚠️ Por favor, selecione o motoboy socorrista na lista!"); return; }
     let transferAddress = '';
 
-    // Se o problema foi ANTES da coleta, não exigimos (nem usamos) endereço de encontro.
-    // O backend vai reatribuir a OS para o novo motoboy ir direto ao ponto de coleta original.
     if (!transferBeforePickup) {
         const hasAny = [street, number, district, city, state, cep, complement].some(v => (v || '').trim() !== '');
 
@@ -493,7 +573,6 @@ function submitTransferRoute() {
             return;
         }
 
-        // Monta string amigável apenas com o que foi preenchido.
         const partes = [];
         if (street) {
             let linha = street;

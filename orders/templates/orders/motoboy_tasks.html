@@ -102,7 +102,7 @@
                     </button>
                 </form>
                 
-                <button type="button" onclick="abrirModalProblema()" class="btn btn-link text-secondary w-100 mt-2 text-decoration-none fw-bold" style="font-size: 0.8rem;">
+                <button type="button" onclick="abrirModalOcorrencia()" class="btn btn-link text-secondary w-100 mt-2 text-decoration-none fw-bold" style="font-size: 0.8rem;">
                     <i class="bi bi-exclamation-octagon"></i> Reportar Problema
                 </button>
             </div>
@@ -111,51 +111,8 @@
                 <div class="alert alert-danger mb-0 fw-bold text-center border-danger shadow-sm">
                     <i class="bi bi-exclamation-triangle-fill fs-3 d-block mb-1"></i>
                     ROTA SUSPENSA<br>
-                    <small class="fw-normal">Veículo avariado. Aguardando despachante transferir a carga.</small>
+                    <small class="fw-normal">Ocorrência registada. Aguardando despachante.</small>
                 </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="modal fade" id="problemModal" tabindex="-1" aria-hidden="true" style="z-index: 1070;">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content border-0 rounded-4 shadow-lg">
-                <form id="form-problem" method="POST" action="">
-                    {% csrf_token %}
-                    <div class="modal-header bg-danger text-white border-0 rounded-top-4">
-                        <h5 class="modal-title fw-bold"><i class="bi bi-exclamation-triangle-fill"></i> Reportar Problema</h5>
-                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-                    </div>
-                    
-                    <div class="modal-body p-4 bg-slate-50">
-                        <p class="text-slate-500 small mb-4">A sua rota será pausada e o despachante será notificado imediatamente.</p>
-                        
-                        <div class="mb-3">
-                            <label class="form-label fw-bold text-slate-500 small text-uppercase">Motivo Principal</label>
-                            <select name="motivo" class="form-select form-select-lg rounded-3 border-light shadow-sm fw-bold text-dark" required>
-                                <option value="">Selecione um motivo...</option>
-                                <option value="Destinatário Ausente">Destinatário Ausente</option>
-                                <option value="Endereço não localizado">Endereço não localizado</option>
-                                <option value="Mercadoria recusada">Mercadoria recusada pelo cliente</option>
-                                <option value="Veículo avariado / Acidente">Veículo avariado / Acidente</option>
-                                <option value="Local Fechado">Local Fechado</option>
-                                <option value="Outro">Outro Motivo</option>
-                            </select>
-                        </div>
-                        
-                        <div class="mb-2">
-                            <label class="form-label fw-bold text-slate-500 small text-uppercase">Detalhes (Opcional)</label>
-                            <textarea name="detalhes" class="form-control rounded-3 border-light shadow-sm" rows="3" placeholder="Explique a situação..."></textarea>
-                        </div>
-                    </div>
-                    
-                    <div class="modal-footer bg-white border-top-0 p-3 d-flex gap-2">
-                        <button type="button" class="btn btn-light fw-bold text-secondary flex-grow-1 py-3 rounded-4" data-bs-dismiss="modal">Cancelar</button>
-                        <button type="submit" class="btn btn-danger fw-bold flex-grow-1 py-3 rounded-4 shadow-sm" onclick="this.innerHTML='<span class=\'spinner-border spinner-border-sm\'></span> Enviando...'; this.form.submit();">
-                            Confirmar Ocorrência
-                        </button>
-                    </div>
-                </form>
             </div>
         </div>
     </div>
@@ -196,7 +153,71 @@
         </div>
     </div>
 
-    <!-- Bloco de dados dinâmicos em JS, consumidos pelo script estático -->
+    <div class="modal fade" id="occurrenceModal" tabindex="-1" aria-hidden="true" style="z-index: 1070;">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 rounded-4 shadow-lg overflow-hidden">
+                <div class="modal-header bg-danger text-white border-0 p-4">
+                    <h5 class="modal-title fw-bold d-flex align-items-center gap-2">
+                        <i class="bi bi-exclamation-triangle fs-4"></i> Registrar Ocorrência
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                
+                <form id="occurrenceForm" method="POST" action="" enctype="multipart/form-data">
+                    {% csrf_token %}
+                    <div class="modal-body p-4 bg-slate-50">
+                        
+                        <div class="mb-4">
+                            <label class="form-label fw-bold small text-slate-500 text-uppercase tracking-wide">Qual o problema principal?</label>
+                            <select name="causa" id="ocCausa" class="form-select form-select-lg border-danger shadow-sm fw-bold text-dark" required onchange="handleCausaChange()">
+                                <option value="">Selecione um motivo...</option>
+                                <option value="AUSENTE">Destinatário Ausente</option>
+                                <option value="NAO_LOCALIZADO">Endereço não localizado</option>
+                                <option value="RECUSA">Mercadoria recusada</option>
+                                <option value="FECHADO">Local Fechado (Coleta/Entrega)</option>
+                                <option value="ACIDENTE">Veículo avariado / Acidente</option>
+                                <option value="OUTRO">Outro Motivo (Especificar)</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="form-label fw-bold small text-slate-500 text-uppercase tracking-wide">Detalhes / Observação</label>
+                            <textarea name="observacao" id="ocObservacao" class="form-control shadow-sm border-slate-200" rows="3" placeholder="Descreva o que aconteceu de forma clara..."></textarea>
+                            <small class="text-danger fw-bold d-none mt-1" id="obsWarning"><i class="bi bi-asterisk"></i> A observação é obrigatória para este motivo.</small>
+                        </div>
+
+                        <div class="mb-4">
+                            <label class="form-label fw-bold small text-slate-500 text-uppercase tracking-wide">
+                                <i class="bi bi-camera-fill text-secondary"></i> Foto / Evidência
+                            </label>
+                            <input type="file" name="evidencia_foto" id="ocFoto" class="form-control shadow-sm" accept="image/*" capture="environment">
+                            <small class="text-slate-400 mt-1 d-block">Tire foto da porta fechada, campainha ou do veículo.</small>
+                        </div>
+
+                        <div class="p-3 bg-white border border-slate-200 rounded-3 shadow-sm d-flex align-items-start gap-3 mt-4 transition-all" id="boxPodeSeguir">
+                            <div class="form-check form-switch fs-4 mb-0 mt-1">
+                                <input class="form-check-input" type="checkbox" name="pode_seguir" id="podeSeguir" checked>
+                            </div>
+                            <div>
+                                <label class="form-check-label fw-bold text-dark" for="podeSeguir" style="cursor: pointer;">
+                                    Posso seguir para a próxima parada
+                                </label>
+                                <p class="text-slate-500 mb-0 mt-1" style="font-size: 0.75rem; line-height: 1.2;">
+                                    Desmarque se você está preso no local, o pneu furou, ou se é um acidente que te impede de pilotar.
+                                </p>
+                            </div>
+                        </div>
+
+                    </div>
+                    <div class="modal-footer bg-white border-top p-3 d-flex justify-content-between">
+                        <button type="button" class="btn btn-light text-secondary fw-bold border rounded-3 px-4" data-bs-dismiss="modal">Cancelar</button>
+                        <button type="submit" class="btn btn-danger fw-bold shadow-sm rounded-3 px-4" onclick="this.innerHTML='<span class=\'spinner-border spinner-border-sm\'></span> Enviando...';">Enviar e Congelar Rota</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <script>
     window.MOTOBOY_ORDERS = [
         {% for data in ativas_data %}
@@ -218,10 +239,8 @@
                     is_failed: {{ stop.is_failed|yesno:"true,false" }},
                     is_frozen: {% if stop.failure_reason and 'Encontro:' not in stop.failure_reason and 'Devolver em:' not in stop.failure_reason and not stop.is_completed %}true{% else %}false{% endif %},
                     
-                    // Lógica atualizada para lidar com as 4 opções
                     name: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_name|escapejs }}{% elif stop.stop_type == 'ENTREGA' %}{{ stop.destination.destination_name|escapejs }}{% elif stop.stop_type == 'TRANSFERENCIA' %}Ponto de Encontro (Socorro){% else %}Local de Devolução{% endif %}",
                     
-                    // Se for Transferência/Devolução, o endereço está no failure_reason
                     address: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_street|escapejs }}, {{ stop.service_order.origin_number }} - {{ stop.service_order.origin_district|escapejs }}{% elif stop.stop_type == 'ENTREGA' %}{{ stop.destination.destination_street|escapejs }}, {{ stop.destination.destination_number }} - {{ stop.destination.destination_district|escapejs }}{% else %}{{ stop.failure_reason|escapejs }}{% endif %}",
                     
                     reference: "{% if stop.stop_type == 'COLETA' %}{{ stop.service_order.origin_reference|escapejs|default:'' }}{% elif stop.stop_type == 'ENTREGA' %}{{ stop.destination.destination_reference|escapejs|default:'' }}{% else %}Sem referência{% endif %}",
@@ -230,7 +249,6 @@
                     
                     os_origem: "{{ stop.service_order.os_number }}",
                     
-                    // Os itens a mostrar: Se for entrega, mostra os do destino. Caso contrário, mostra tudo o que a OS carrega.
                     items_details: [
                         {% if stop.stop_type == 'ENTREGA' %}
                             {% for dist in stop.destination.distributed_items.all %}

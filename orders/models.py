@@ -1,7 +1,10 @@
-from django.db import models
+from django.db import models, transaction
 from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.utils import timezone
 from logistics.models import MotoboyProfile
 import uuid
+
 
 class ServiceOrder(models.Model):
     class Status(models.TextChoices):
@@ -82,9 +85,20 @@ class ServiceOrder(models.Model):
 
 
 class OSItem(models.Model):
+    # Faltava esta classe!
+    class ItemStatus(models.TextChoices):
+        NAO_COLETADO = 'NAO_COLETADO', 'Não Coletado'
+        COLETADO = 'COLETADO', 'Coletado (Em posse)'
+        TRANSFERIDO = 'TRANSFERIDO', 'Transferido'
+        ENTREGUE = 'ENTREGUE', 'Entregue'
+        RETORNADO = 'RETORNADO', 'Retornado'
+        EXTRAVIADO = 'EXTRAVIADO', 'Extraviado'
+
     order = models.ForeignKey(ServiceOrder, on_delete=models.CASCADE, related_name='items')
     description = models.CharField(max_length=200, verbose_name="Descrição do Item")
     total_quantity = models.PositiveIntegerField(verbose_name="Quantidade Total")
+    status = models.CharField(max_length=20, choices=ItemStatus.choices, default=ItemStatus.NAO_COLETADO)
+    posse_atual = models.ForeignKey('logistics.MotoboyProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='itens_em_posse')
     item_type = models.CharField(max_length=50, blank=True, null=True, verbose_name="Tipo de Item")
     weight = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True, verbose_name="Peso (kg)")
     dimensions = models.CharField(max_length=50, blank=True, verbose_name="Dimensões (CxLxA)")
@@ -92,6 +106,11 @@ class OSItem(models.Model):
     is_fragile = models.BooleanField(default=False, verbose_name="Frágil?")
     requires_signature = models.BooleanField(default=True, verbose_name="Exige Assinatura?")
     item_notes = models.TextField(blank=True, verbose_name="Observações do Item")
+
+    def clean(self):
+        # Validação Anti-Bug de Estado
+        if self.status == self.ItemStatus.ENTREGUE and not self.posse_atual:
+            raise ValidationError("Um item não pode ser entregue se não estava em posse de um motoboy.")
 
     def __str__(self):
         return f"{self.total_quantity}x {self.description}"
@@ -155,23 +174,36 @@ class RouteStop(models.Model):
         TRANSFER = 'TRANSFERENCIA', 'Transferência de Carga'
         RETURN = 'DEVOLUCAO', 'Devolução'
 
+    # Faltava esta classe!
+    class StopStatus(models.TextChoices):
+        PENDENTE = 'PENDENTE', 'Pendente'
+        EM_ANDAMENTO = 'EM_ANDAMENTO', 'Em Andamento'
+        CONCLUIDA = 'CONCLUIDA', 'Concluída'
+        COM_OCORRENCIA = 'COM_OCORRENCIA', 'Com Ocorrência'
+        AGUARDANDO_DECISAO = 'AGUARDANDO_DECISAO', 'Aguardando Decisão'
+        CANCELADA = 'CANCELADA', 'Cancelada'
+
     motoboy = models.ForeignKey('logistics.MotoboyProfile', on_delete=models.CASCADE, related_name='route_stops', null=True, blank=True)
     service_order = models.ForeignKey(ServiceOrder, on_delete=models.CASCADE, related_name='stops')
     
-    # Define se o motoboy está indo lá pra buscar o pacote ou pra entregar
     stop_type = models.CharField(max_length=20, choices=StopType.choices)
-    
-    # Se for uma entrega, vinculamos qual é o destino específico. Se for coleta, fica vazio (pois usa a origem da OS).
     destination = models.ForeignKey(OSDestination, on_delete=models.CASCADE, null=True, blank=True)
-    
-    # A ordem exata que o motoboy deve seguir (1, 2, 3, 4...)
     sequence = models.PositiveIntegerField(default=0)
     
-    # Status da parada
+    status = models.CharField(max_length=25, choices=StopStatus.choices, default=StopStatus.PENDENTE)
     is_completed = models.BooleanField(default=False)
     completed_at = models.DateTimeField(null=True, blank=True)
+    bloqueia_proxima = models.BooleanField(default=True, help_text="Se True, o motoboy não pode avançar sem resolver esta parada.")
+    
+    # Estes dois campos faltavam e a função __str__ precisa deles!
     is_failed = models.BooleanField(default=False)
     failure_reason = models.CharField(max_length=255, blank=True)
+
+    def clean(self):
+        if self.pk:
+            old_instance = RouteStop.objects.get(pk=self.pk)
+            if old_instance.is_completed and not self.is_completed:
+                raise ValidationError("Não é permitido reabrir uma parada que já foi concluída.")
 
     class Meta:
         ordering = ['motoboy', 'sequence']
@@ -185,7 +217,6 @@ class RouteStop(models.Model):
             local = self.destination.destination_name if self.destination else "Destino Indefinido"
         elif self.stop_type == 'TRANSFERENCIA':
             tipo = "Transferência"
-            # Usa o texto que guardámos no failure_reason como local
             local = self.failure_reason if self.failure_reason else "Ponto de Encontro"
         elif self.stop_type == 'DEVOLUCAO':
             tipo = "Devolução"
@@ -195,3 +226,55 @@ class RouteStop(models.Model):
             local = "Desconhecido"
             
         return f"{self.sequence}º Parada: {tipo} em {local} (OS {self.service_order.os_number})"
+    
+class Occurrence(models.Model):
+    class Causa(models.TextChoices):
+        AUSENTE = 'AUSENTE', 'Destinatário Ausente'
+        NAO_LOCALIZADO = 'NAO_LOCALIZADO', 'Endereço não localizado'
+        RECUSA = 'RECUSA', 'Mercadoria recusada'
+        ACIDENTE = 'ACIDENTE', 'Veículo avariado / Acidente'
+        FECHADO = 'FECHADO', 'Local Fechado'
+        OUTRO = 'OUTRO', 'Outro Motivo'
+
+    class Urgencia(models.TextChoices):
+        BAIXA = 'BAIXA', 'Baixa'
+        MEDIA = 'MEDIA', 'Média'
+        ALTA = 'ALTA', 'Alta (Crítico)'
+
+    parada = models.ForeignKey(RouteStop, on_delete=models.CASCADE, related_name='ocorrencias')
+    service_order = models.ForeignKey(ServiceOrder, on_delete=models.CASCADE, related_name='ocorrencias')
+    motoboy = models.ForeignKey('logistics.MotoboyProfile', on_delete=models.CASCADE)
+    
+    causa = models.CharField(max_length=20, choices=Causa.choices)
+    subtipo_tags = models.JSONField(blank=True, null=True, help_text="Ex: ['Sem internet', 'Área de risco']")
+    observacao = models.TextField(blank=True)
+    
+    tentativas_contato = models.PositiveIntegerField(default=0)
+    evidencia_foto = models.ImageField(upload_to='ocorrencias/evidencias/', null=True, blank=True)
+    
+    urgencia = models.CharField(max_length=10, choices=Urgencia.choices, default=Urgencia.MEDIA)
+    criado_em = models.DateTimeField(auto_now_add=True)
+    resolvida = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"Ocorrência {self.get_causa_display()} na OS {self.service_order.os_number}"
+
+
+class DispatcherDecision(models.Model):
+    class Acao(models.TextChoices):
+        REAGENDAR = 'REAGENDAR', 'Reagendar tentativa'
+        ALTERAR_ENDERECO = 'ALTERAR_ENDERECO', 'Alterar endereço'
+        AUTORIZAR_ALTERNATIVA = 'AUTORIZAR_ALTERNATIVA', 'Autorizar entrega alternativa'
+        RETORNAR = 'RETORNAR', 'Retornar mercadoria'
+        CANCELAR = 'CANCELAR', 'Cancelar OS/Entrega'
+        TRANSFERIR_MOTOBOY = 'TRANSFERIR_MOTOBOY', 'Transferir para outro motoboy'
+        CRIAR_PARADA = 'CRIAR_PARADA', 'Criar parada extra'
+
+    occurrence = models.OneToOneField(Occurrence, on_delete=models.CASCADE, related_name='decisao')
+    acao = models.CharField(max_length=30, choices=Acao.choices)
+    detalhes = models.TextField(blank=True)
+    decidido_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    decidido_em = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return f"Decisão {self.get_acao_display()} por {self.decidido_por}"

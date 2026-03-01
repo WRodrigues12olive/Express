@@ -13,6 +13,8 @@ from logistics.models import MotoboyProfile
 from django.core.cache import cache
 from django.db.models import Q, F
 from django.db import transaction
+from orders.models import Occurrence, DispatcherDecision
+from orders.services import transferir_rota_por_acidente
 
 @login_required
 def root_redirect(request):
@@ -32,6 +34,88 @@ def root_redirect(request):
         return redirect('dispatch_dashboard')
         
     return redirect('login')
+
+@login_required
+@require_POST
+def resolve_occurrence_view(request, occurrence_id):
+    """ Processa a decisão do despachante para uma ocorrência """
+    if request.user.type != 'DISPATCHER' and not request.user.is_superuser:
+        return JsonResponse({'status': 'error', 'message': 'Sem permissão.'}, status=403)
+
+    ocorrencia = get_object_or_404(Occurrence, id=occurrence_id, resolvida=False)
+    data = json.loads(request.body)
+    acao = data.get('acao')
+    
+    os_atual = ocorrencia.service_order
+    parada = ocorrencia.parada
+
+    try:
+        if acao == DispatcherDecision.Acao.TRANSFERIR_MOTOBOY:
+            novo_motoboy_id = data.get('novo_motoboy_id')
+            local_encontro = data.get('local_encontro', 'Base da Empresa')
+            
+            if not novo_motoboy_id:
+                return JsonResponse({'status': 'error', 'message': 'Selecione um motoboy.'}, status=400)
+                
+            # Chama a função cirúrgica que criámos no services.py
+            transferir_rota_por_acidente(ocorrencia.id, novo_motoboy_id, local_encontro, request.user)
+            
+            return JsonResponse({'status': 'success', 'message': 'Rota transferida com sucesso!'})
+
+        elif acao == DispatcherDecision.Acao.REAGENDAR:
+            # O despachante diz ao motoboy "Tenta de novo" ou "Ignora o erro por agora"
+            parada.is_failed = False
+            parada.bloqueia_proxima = False
+            parada.status = RouteStop.StopStatus.PENDENTE
+            parada.failure_reason = ""
+            parada.save()
+            
+            os_atual.status = ServiceOrder.Status.ACCEPTED # Volta ao normal
+            os_atual.save()
+
+            DispatcherDecision.objects.create(
+                occurrence=ocorrencia, acao=acao, 
+                detalhes="O despachante mandou re-tentar ou ignorar o bloqueio.", 
+                decidido_por=request.user
+            )
+            
+            ocorrencia.resolvida = True
+            ocorrencia.save()
+
+        elif acao == DispatcherDecision.Acao.RETORNAR:
+            # Agendar devolução (falha definitiva na entrega)
+            parada.is_failed = True
+            parada.is_completed = True # Tira da frente do motoboy
+            parada.completed_at = timezone.now()
+            parada.status = RouteStop.StopStatus.COM_OCORRENCIA
+            parada.save()
+            
+            # Cria a parada extra de devolução
+            RouteStop.objects.create(
+                service_order=os_atual,
+                motoboy=ocorrencia.motoboy,
+                stop_type=RouteStop.StopType.RETURN,
+                sequence=parada.sequence + 1,
+                failure_reason=data.get('endereco_retorno', 'Devolver na Base'),
+                status=RouteStop.StopStatus.PENDENTE
+            )
+            
+            DispatcherDecision.objects.create(
+                occurrence=ocorrencia, acao=acao, 
+                detalhes="Devolução agendada para a base.", 
+                decidido_por=request.user
+            )
+            
+            ocorrencia.resolvida = True
+            ocorrencia.save()
+
+        else:
+            return JsonResponse({'status': 'error', 'message': 'Ação não reconhecida.'}, status=400)
+
+        return JsonResponse({'status': 'success'})
+
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
 @login_required
 @require_POST
@@ -186,7 +270,9 @@ def dispatch_dashboard_view(request):
     if request.user.type != 'DISPATCHER' and not request.user.is_superuser:
         return redirect('root')
 
-    pending_orders = ServiceOrder.objects.filter(status='PENDENTE').order_by('-priority', 'created_at')
+    pending_orders = ServiceOrder.objects.filter(
+        Q(status='PENDENTE') | Q(status='OCORRENCIA', motoboy__isnull=True)
+    ).order_by('-priority', 'created_at')
     
     from logistics.models import MotoboyProfile
     motoboys = MotoboyProfile.objects.all()
@@ -219,6 +305,8 @@ def dispatch_dashboard_view(request):
         'total_ocorrencias': total_ocorrencias,
         'now': timezone.now(),
     }
+    context['ocorrencias_pendentes'] = Occurrence.objects.filter(resolvida=False).order_by('-urgencia', '-criado_em')
+
     return render(request, 'orders/dispatch_panel.html', context)
 
 @login_required
@@ -654,53 +742,60 @@ def company_dashboard_view(request):
 @login_required
 @require_POST
 def report_problem_view(request, stop_id):
-    """ Regista uma ocorrência e decide se trava a rota ou avança """
+    """ Regista uma ocorrência oficial, salva evidências e decide o estado da rota """
     if request.user.type != 'MOTOBOY':
         return redirect('root')
 
-    current_stop = get_object_or_404(RouteStop, id=stop_id, motoboy__user=request.user)
-    os = current_stop.service_order
-
-    motivo = request.POST.get('motivo', 'Outro')
-    detalhes = request.POST.get('detalhes', '')
-
-    os.status = 'OCORRENCIA'
+    from orders.models import RouteStop, Occurrence, ServiceOrder
     
-    nova_nota = f"\n[🚨 OCORRÊNCIA - Parada {current_stop.sequence} ({current_stop.stop_type})] Motivo: {motivo}. Detalhes: {detalhes}"
-    os.operational_notes += nova_nota
-    current_stop.failure_reason = nova_nota
+    # 1. Busca as entidades
+    current_stop = get_object_or_404(RouteStop, id=stop_id, motoboy__user=request.user)
+    os_atual = current_stop.service_order
+    motoboy_profile = request.user.motoboy_profile
 
-    # INTELIGÊNCIA DE ROTA:
-    if motivo == 'Veículo avariado / Acidente':
-        # Travamos a rota inteira até o despachante decidir (socorro / transferência)
-        current_stop.save()
-        messages.warning(request, "Veículo avariado reportado! Rota suspensa. Aguarde o socorro ou instruções.")
-    else:
-        # Marca a parada atual como falhada
-        current_stop.is_completed = True
-        current_stop.is_failed = True
-        current_stop.completed_at = timezone.now()
-        current_stop.save()
+    # 2. Extrai os dados do formulário
+    causa = request.POST.get('causa')
+    observacao = request.POST.get('observacao', '')
+    evidencia_foto = request.FILES.get('evidencia_foto')
+    
+    # O motoboy diz se pode continuar a viagem ou se está travado (ex: quebrou a moto)
+    pode_seguir = request.POST.get('pode_seguir') == 'on'
 
-        # Regra especial: se falhou na COLETA, nenhuma entrega ligada a essa coleta pode continuar
-        if current_stop.stop_type == 'COLETA':
-            # Todas as paradas de ENTREGA desta mesma OS são invalidadas
-            RouteStop.objects.filter(
-                service_order=os,
-                stop_type='ENTREGA',
-                is_completed=False
-            ).update(
-                is_completed=True,
-                is_failed=True,
-                completed_at=timezone.now()
-            )
-            os.operational_notes += "\n[⚠️ ROTEIRO] Coleta não realizada. Entregas dessa coleta foram bloqueadas automaticamente."
-            messages.warning(request, "Coleta não realizada. As entregas vinculadas a esta coleta foram bloqueadas.")
-        else:
-            # Para falhas em entrega/transferência, a rota pode seguir para as próximas paradas
-            messages.warning(request, "Ocorrência registada. Pode continuar para a próxima etapa da rota.")
+    if not causa:
+        messages.error(request, "A causa da ocorrência é obrigatória.")
+        return redirect('motoboy_tasks')
 
-    os.save()
+    # 3. Cria o registro de Ocorrência estruturado
+    ocorrencia = Occurrence.objects.create(
+        parada=current_stop,
+        service_order=os_atual,
+        motoboy=motoboy_profile,
+        causa=causa,
+        observacao=observacao,
+        evidencia_foto=evidencia_foto,
+        urgencia=Occurrence.Urgencia.ALTA if causa == 'ACIDENTE' else Occurrence.Urgencia.MEDIA
+    )
+
+    # 4. Atualiza a Parada (RouteStop)
+    current_stop.status = RouteStop.StopStatus.COM_OCORRENCIA
+    current_stop.is_failed = True
+    current_stop.failure_reason = f"{ocorrencia.get_causa_display()}"
+    
+    # Se for acidente, bloqueia a rota na marra. Se não for, respeita o que o motoboy marcou.
+    current_stop.bloqueia_proxima = True if causa == 'ACIDENTE' else not pode_seguir
+    current_stop.save()
+
+    # 5. Atualiza o status da OS Mãe e das filhas para OCORRENCIA (para o despachante ver)
+    root_os = os_atual.parent_os or os_atual
+    grouped_orders = ServiceOrder.objects.filter(Q(id=root_os.id) | Q(parent_os=root_os))
+    grouped_orders.update(status=ServiceOrder.Status.PROBLEM)
+    
+    # Adiciona no Log da OS Mãe
+    nova_nota = f"\n[🚨 OCORRÊNCIA - {current_stop.get_stop_type_display()}] Motivo: {ocorrencia.get_causa_display()}."
+    root_os.operational_notes += nova_nota
+    root_os.save()
+
+    messages.warning(request, "Ocorrência enviada! O despachante já foi notificado.")
     return redirect('motoboy_tasks')
 
 @login_required
@@ -711,39 +806,33 @@ def resolve_os_problem(request, os_id):
         return JsonResponse({'status': 'error', 'message': 'Sem permissão.'}, status=403)
 
     os = get_object_or_404(ServiceOrder, id=os_id)
-    
-    # Lê a ação escolhida pelo Despachante no Modal
     data = json.loads(request.body)
     action = data.get('action', 'reactivate')
 
-    # Se a OS fizer parte de um grupo (Mãe + Filhas), trabalhamos sempre a partir da "raiz" do grupo,
-    # garantindo consistência tanto no status quanto nas paradas vinculadas.
     root_os = os.parent_os or os
-    grouped_orders = ServiceOrder.objects.filter(
-        Q(id=root_os.id) | Q(parent_os=root_os)
-    )
+    grouped_orders = ServiceOrder.objects.filter(Q(id=root_os.id) | Q(parent_os=root_os))
 
     if action == 'reactivate':
-        # Apenas reativamos o status geral da OS para tirar do vermelho.
+        # Reativar: O despachante mandou o motoboy tentar de novo.
         group_stops = RouteStop.objects.filter(service_order__in=grouped_orders)
-
-        if group_stops.filter(stop_type='COLETA', is_completed=True).exists():
-            new_status = 'COLETADO'
-        else:
-            new_status = 'ACEITO'
-
+        new_status = 'COLETADO' if group_stops.filter(stop_type='COLETA', is_completed=True).exists() else 'ACEITO'
+        
         grouped_orders.update(status=new_status)
-        root_os.operational_notes += f"\n[✅ RESOLVIDO] Ocorrência resolvida e rota reativada por {request.user.first_name}."
+        root_os.operational_notes += f"\n[✅ RESOLVIDO] Ocorrência ignorada e rota reativada por {request.user.first_name}."
+        
+        # Limpa o erro da parada travada para ela voltar ao normal na tela do motoboy
+        RouteStop.objects.filter(
+            service_order__in=grouped_orders, is_completed=False, is_failed=True
+        ).update(is_failed=False, failure_reason="")
         
     elif action == 'unassign':
-        # Tira do motoboy atual e devolve o grupo (OS Mãe + Filhas) para a fila de 'Aguardando'
+        # Desvincular: Tira do motoboy e devolve para a fila (Útil se a loja fechou antes dele coletar)
         grouped_orders.update(status='PENDENTE', motoboy=None)
 
-        from orders.models import RouteStop
+        # Limpa o motoboy e reseta a falha para o próximo assumir a OS limpa
         RouteStop.objects.filter(
-            service_order__in=grouped_orders,
-            is_completed=False
-        ).update(motoboy=None)
+            service_order__in=grouped_orders, is_completed=False
+        ).update(motoboy=None, is_failed=False, failure_reason="")
 
         root_os.operational_notes += f"\n[🔄 RETORNOU] Grupo removido do motoboy e voltou para a fila por {request.user.first_name}."
 
@@ -763,16 +852,12 @@ def transfer_route_view(request, os_id):
     os_obj = get_object_or_404(ServiceOrder, id=os_id)
     os_root = os_obj.parent_os or os_obj
     grouped_orders = ServiceOrder.objects.filter(Q(id=os_root.id) | Q(parent_os=os_root))
-    
-    from logistics.models import MotoboyProfile
-    from orders.models import RouteStop
     new_motoboy = get_object_or_404(MotoboyProfile, id=new_motoboy_id)
 
     with transaction.atomic():
         group_stops = RouteStop.objects.filter(service_order__in=grouped_orders)
         is_collected = group_stops.filter(stop_type='COLETA', is_completed=True).exists()
 
-        # Pega a primeira parada pendente "real" (ignorando a parada fantasma de aguardar socorro)
         first_pending = RouteStop.objects.filter(
             service_order__in=grouped_orders,
             is_completed=False
@@ -785,7 +870,6 @@ def transfer_route_view(request, os_id):
 
         old_motoboy = first_pending.motoboy
 
-        # 1. Trava o celular do motoboy antigo na tela de "Aguardando Socorro"
         if old_motoboy and old_motoboy != new_motoboy:
             RouteStop.objects.create(
                 service_order=os_root,
@@ -795,13 +879,7 @@ def transfer_route_view(request, os_id):
                 failure_reason="[AGUARDANDO SOCORRO] Veículo avariado."
             )
 
-        # ============================
-        # FLUXO INTELIGENTE
-        # - Se JÁ COLETOU: mantém o fluxo atual (pede ponto de encontro)
-        # - Se NÃO COLETOU: reatribui a OS para o novo motoboy ir na coleta original
-        # ============================
         if not is_collected:
-            # Reatribui todas as paradas pendentes para o novo motoboy (inclui a COLETA original)
             pending_real_stops = RouteStop.objects.filter(
                 service_order__in=grouped_orders, is_completed=False
             ).exclude(
@@ -830,26 +908,22 @@ def transfer_route_view(request, os_id):
 
             return JsonResponse({'status': 'success'})
 
-        # Se já coletou, é necessário um ponto de encontro para transferência de carga
         if not transfer_address:
             return JsonResponse({
                 'status': 'error',
                 'message': 'Esta OS já foi coletada. Informe o local de encontro para transferir a carga.'
             }, status=400)
 
-        # 2. Abre espaço na sequência para a nova Transferência
         seq_transf = first_pending.sequence
         RouteStop.objects.filter(
             service_order__in=grouped_orders, is_completed=False
         ).exclude(failure_reason__icontains="[AGUARDANDO SOCORRO]").update(sequence=F('sequence') + 1)
 
-        # 3. Cria o "Ponto de Encontro" para o NOVO motoboy ir buscar os itens
         RouteStop.objects.create(
             service_order=os_root, motoboy=new_motoboy, stop_type='TRANSFERENCIA',
             sequence=seq_transf, failure_reason=f"Encontro: {transfer_address}"
         )
 
-        # 4. Transfere as entregas pendentes para o novo e limpa os erros da moto velha
         pending_real_stops = RouteStop.objects.filter(
             service_order__in=grouped_orders, is_completed=False
         ).exclude(failure_reason__icontains="[AGUARDANDO SOCORRO]").exclude(failure_reason__icontains="Encontro:")
@@ -861,13 +935,9 @@ def transfer_route_view(request, os_id):
                 stop.failure_reason = ""
                 stop.save()
 
-        # 5. Corrige o status e Evita o Bug de Memória do Django!
         new_status = 'COLETADO'
-
-        # Atualiza o status e o motoboy em toda a cadeia de ordens (Mãe e Filhas)
         grouped_orders.update(motoboy=new_motoboy, status=new_status)
 
-        # Garante que a OS raiz receba a nota e seja salva corretamente na memória e no banco
         os_root.status = new_status
         os_root.motoboy = new_motoboy
         os_root.operational_notes += f"\n[🚨 SOCORRO] Carga transferida para {new_motoboy.user.first_name}. Ponto de encontro: {transfer_address}"
@@ -878,7 +948,6 @@ def transfer_route_view(request, os_id):
 @login_required
 @require_POST
 def create_return_view(request, os_id):
-    """ Marca a paragem atual como falhada e agenda uma devolução """
     if request.user.type != 'DISPATCHER' and not request.user.is_superuser:
         return JsonResponse({'status': 'error'}, status=403)
     
@@ -888,11 +957,16 @@ def create_return_view(request, os_id):
     
     root_os = get_object_or_404(ServiceOrder, id=os_id)
     grouped_orders = ServiceOrder.objects.filter(Q(id=root_os.id) | Q(parent_os=root_os))
-    from orders.models import RouteStop
 
     with transaction.atomic():
         motoboy = root_os.motoboy
         
+        active_stop = motoboy.route_stops.filter(service_order__in=grouped_orders, is_completed=False).order_by('sequence').first()
+        if active_stop and active_stop.is_failed:
+            active_stop.is_completed = True
+            active_stop.completed_at = timezone.now()
+            active_stop.save()
+            
         sequence_to_use = 99
         if motoboy:
             if is_priority:
@@ -900,8 +974,7 @@ def create_return_view(request, os_id):
                 if current_active:
                     sequence_to_use = current_active.sequence + 1
                     motoboy.route_stops.filter(
-                        is_completed=False,
-                        sequence__gte=sequence_to_use
+                        is_completed=False, sequence__gte=sequence_to_use
                     ).update(sequence=F('sequence') + 1)
                 else:
                     sequence_to_use = motoboy.route_stops.count() + 1

@@ -59,7 +59,7 @@ function renderList() {
             if (nextStop.is_frozen) {
                 nextStopHTML = `
                 <div class="alert alert-danger py-2 mb-0 mt-2 small fw-bold text-center border-danger">
-                    <i class="bi bi-exclamation-triangle-fill"></i> ROTA SUSPENSA (Aguardando Socorro)
+                    <i class="bi bi-exclamation-triangle-fill"></i> ROTA SUSPENSA (Aguardando Decisão)
                 </div>`;
             } else {
                 nextStopHTML = `
@@ -117,6 +117,78 @@ function renderList() {
     document.getElementById('kpi-entregas').innerText = totalEntregasPendentes;
 }
 
+// === NOVA LÓGICA DE OCORRÊNCIA UNIFICADA ===
+function abrirModalOcorrencia() {
+    console.log("Tentando abrir o modal de ocorrência...");
+    
+    if (!activeOs) {
+        console.error("Erro: Nenhuma OS ativa no momento.");
+        return;
+    }
+    
+    const currentStopIndex = activeOs.stops.findIndex(s => !s.is_completed);
+    if (currentStopIndex === -1) {
+        console.error("Erro: Nenhuma parada pendente.");
+        return;
+    }
+    
+    const currentStop = activeOs.stops[currentStopIndex];
+    console.log("Parada com problema:", currentStop);
+
+    const form = document.getElementById('occurrenceForm');
+    if (!form) {
+        console.error("Erro: O formulário de ocorrência não está no HTML.");
+        return;
+    }
+
+    // Mantive a sua URL antiga para evitar problemas de rota no urls.py
+    form.action = `/minhas-entregas/problema/${currentStop.id}/`; 
+    
+    form.reset();
+    handleCausaChange(); 
+    
+    const modalEl = document.getElementById('occurrenceModal');
+    if (modalEl) {
+        // Inicialização mais segura do Bootstrap 5
+        const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        modal.show();
+        console.log("Modal aberto com sucesso!");
+    } else {
+        console.error("Erro: occurrenceModal não encontrado no HTML.");
+    }
+}
+
+function handleCausaChange() {
+    const causa = document.getElementById('ocCausa').value;
+    const obs = document.getElementById('ocObservacao');
+    const warning = document.getElementById('obsWarning');
+    const boxPodeSeguir = document.getElementById('boxPodeSeguir');
+    const chkPodeSeguir = document.getElementById('podeSeguir');
+
+    if (causa === 'ACIDENTE') {
+        chkPodeSeguir.checked = false;
+        boxPodeSeguir.classList.add('opacity-50', 'bg-light');
+        chkPodeSeguir.disabled = true;
+    } else {
+        chkPodeSeguir.checked = true;
+        boxPodeSeguir.classList.remove('opacity-50', 'bg-light');
+        chkPodeSeguir.disabled = false;
+    }
+
+    const obsObrigatoria = ['OUTRO', 'NAO_LOCALIZADO', 'RECUSA'].includes(causa);
+    if (obsObrigatoria) {
+        obs.required = true;
+        warning.classList.remove('d-none');
+        obs.classList.add('border-danger');
+    } else {
+        obs.required = false;
+        warning.classList.add('d-none');
+        obs.classList.remove('border-danger');
+    }
+}
+// ==========================================
+
+
 function openOS(id) {
     sessionStorage.setItem('reopenOsId', id); 
     
@@ -133,7 +205,6 @@ function openOS(id) {
     const bottomAction = document.getElementById('exec-bottom-action');
 
     if (currentStop) {
-        // Configuração dos Títulos dependendo da Ação
         let itemsTitle = 'Itens para Coletar';
         let btnText = 'Confirmar Coleta';
         let badgeClass = 'bg-warning bg-opacity-10 text-warning';
@@ -165,7 +236,6 @@ function openOS(id) {
         });
         itemsHTML += '</ul>';
         
-        // Ajuste no link de navegação para resolver problemas com endereços complexos
         const navUrl = `http://maps.google.com/maps?q=${encodeURIComponent(currentStop.address)}`;
 
         cardContainer.innerHTML = `
@@ -213,11 +283,9 @@ function openOS(id) {
         const frozenAlert = document.getElementById('frozen-alert-container');
 
         if (currentStop.is_frozen) {
-            // Esconde os botões e mostra o alerta de Rota Suspensa
             if(actionBtns) actionBtns.classList.add('d-none');
             if(frozenAlert) frozenAlert.classList.remove('d-none');
         } else {
-            // Mostra os botões normais
             if(actionBtns) actionBtns.classList.remove('d-none');
             if(frozenAlert) frozenAlert.classList.add('d-none');
             
@@ -253,10 +321,9 @@ function openOS(id) {
 
     activeOs.stops.forEach((stop, index) => {
         const isCompleted = stop.is_completed;
-        const isFailed = stop.is_failed; // <-- Lemos se falhou
+        const isFailed = stop.is_failed; 
         const isCurrent = index === currentStopIndex;
         
-        // NOVO: Lógica de cores para o Visto Verde vs X Vermelho
         let dotClass, iconHTML;
         
         if (isFailed) {
@@ -273,7 +340,6 @@ function openOS(id) {
             iconHTML = '';
         }
         
-        // Cores da badge da timeline dependendo do tipo da parada
         let typeBadge = 'bg-primary bg-opacity-10 text-primary';
         if (stop.type === 'COLETA') typeBadge = 'bg-warning bg-opacity-10 text-warning';
         else if (stop.type === 'TRANSFERENCIA') typeBadge = 'bg-danger bg-opacity-10 text-danger';
@@ -341,18 +407,6 @@ function confirmarEtapa() {
         btn.disabled = true;
         document.getElementById('form-confirmar-etapa').submit();
     }
-}
-
-function abrirModalProblema() {
-    if (!activeOs) return;
-    const currentStopIndex = activeOs.stops.findIndex(s => !s.is_completed);
-    if (currentStopIndex === -1) return;
-    const currentStop = activeOs.stops[currentStopIndex];
-
-    document.getElementById('form-problem').action = `/minhas-entregas/problema/${currentStop.id}/`;
-    
-    const problemModal = new bootstrap.Modal(document.getElementById('problemModal'));
-    problemModal.show();
 }
 
 document.getElementById('proof_photo')?.addEventListener('change', function(e) {
