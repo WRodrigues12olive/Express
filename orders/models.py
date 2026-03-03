@@ -269,6 +269,7 @@ class DispatcherDecision(models.Model):
         CANCELAR = 'CANCELAR', 'Cancelar OS/Entrega'
         TRANSFERIR_MOTOBOY = 'TRANSFERIR_MOTOBOY', 'Transferir para outro motoboy'
         CRIAR_PARADA = 'CRIAR_PARADA', 'Criar parada extra'
+        VOLTAR_FILA = 'VOLTAR_FILA', 'Voltar para a Fila'
 
     occurrence = models.OneToOneField(Occurrence, on_delete=models.CASCADE, related_name='decisao')
     acao = models.CharField(max_length=30, choices=Acao.choices)

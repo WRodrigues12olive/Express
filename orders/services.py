@@ -2,6 +2,8 @@
 from django.db import transaction, models
 from django.utils import timezone
 from .models import ServiceOrder, RouteStop, OSItem, Occurrence, DispatcherDecision
+from django.db.models import Q, Value
+from django.db.models.functions import Concat
 
 @transaction.atomic
 def transferir_rota_por_acidente(ocorrencia_id, novo_motoboy_id, local_transferencia_str, despachante_user):
@@ -16,9 +18,13 @@ def transferir_rota_por_acidente(ocorrencia_id, novo_motoboy_id, local_transfere
     if ocorrencia.resolvida:
         raise ValueError("Esta ocorrência já foi resolvida.")
 
-    # Verifica quais itens desta OS estão sob posse física do motoboy antigo
+    # 1. Pega a OS Mãe e as Filhas para não esquecer pacotes mesclados
+    root_os = os_atual.parent_os or os_atual
+    grouped_orders = ServiceOrder.objects.filter(Q(id=root_os.id) | Q(parent_os=root_os))
+
+    # 2. Verifica quais itens DESTE GRUPO estão no baú do motoboy antigo (Cenários 1 e 2)
     itens_em_posse = OSItem.objects.filter(
-        order=os_atual, 
+        order__in=grouped_orders, 
         posse_atual=motoboy_antigo, 
         status=OSItem.ItemStatus.COLETADO
     )
@@ -26,74 +32,87 @@ def transferir_rota_por_acidente(ocorrencia_id, novo_motoboy_id, local_transfere
     tem_itens_na_bag = itens_em_posse.exists()
     
     # Registra a decisão do despachante
-    decisao = DispatcherDecision.objects.create(
+    DispatcherDecision.objects.create(
         occurrence=ocorrencia,
         acao=DispatcherDecision.Acao.TRANSFERIR_MOTOBOY,
         detalhes=f"Transferido para motoboy ID {novo_motoboy_id}. Local: {local_transferencia_str}",
         decidido_por=despachante_user
     )
 
+    # Pega todas as paradas que o Motoboy A AINDA NÃO FEZ
     paradas_pendentes = RouteStop.objects.filter(
-        service_order=os_atual, 
+        service_order__in=grouped_orders, 
         motoboy=motoboy_antigo, 
         is_completed=False
     ).order_by('sequence')
 
     if not tem_itens_na_bag:
         # ==========================================
-        # CENÁRIO 1: Motoboy antigo NÃO coletou nada
+        # CENÁRIO 3: Motoboy antigo NÃO coletou nada (Troca Limpa)
         # ==========================================
-        # Simplesmente passamos as paradas pendentes (incluindo a coleta não feita) para o novo motoboy.
-        paradas_pendentes.update(motoboy_id=novo_motoboy_id, status=RouteStop.StopStatus.PENDENTE)
+        # Passa as paradas direto e LIMPA O VÍRUS do erro antigo.
+        paradas_pendentes.update(
+            motoboy_id=novo_motoboy_id, 
+            status=RouteStop.StopStatus.PENDENTE,
+            is_failed=False,           # Cura a parada
+            failure_reason="",         # Cura a parada
+            bloqueia_proxima=False     # Destrava o app do novo motoboy
+        )
         
-        os_atual.operational_notes += f"\n[TRANSFERÊNCIA] Rota repassada direto (sem itens em posse)."
+        root_os.operational_notes += f"\n[TRANSFERÊNCIA LIMPA] Rota repassada para outro técnico antes da coleta."
+        novo_status_os = 'ACEITO'
         
     else:
         # ==========================================
-        # CENÁRIOS 2 e 3: Motoboy antigo já coletou itens
-        # (Pode ou não ter feito algumas entregas, as entregues já estão seguras no DB)
+        # CENÁRIOS 1 e 2: Motoboy antigo tem pacotes no baú!
         # ==========================================
         
-        # 1. Encontra a sequência para encaixar a transferência (logo antes da próxima parada pendente)
         prox_parada = paradas_pendentes.first()
         seq_transferencia = prox_parada.sequence if prox_parada else 99
         
-        # Empurra a sequência das próximas paradas 1 passo para frente para caber a transferência
+        # 1. Passa as paradas faltantes para o B, empurra a sequência e LIMPA os erros
         for p in paradas_pendentes:
             p.sequence += 1
-            p.motoboy_id = novo_motoboy_id # Já repassa a responsabilidade pro novo
+            p.motoboy_id = novo_motoboy_id
             p.status = RouteStop.StopStatus.PENDENTE
+            p.is_failed = False          # Cura a parada
+            p.failure_reason = ""        # Cura a parada
+            p.bloqueia_proxima = False   # Destrava a tela
             p.save()
 
-        # 2. Cria a parada de TRANSFERÊNCIA para o NOVO motoboy ir buscar a carga
-        parada_transf = RouteStop.objects.create(
-            service_order=os_atual,
+        # 2. Cria a parada de RESGATE obrigatória antes de tudo
+        RouteStop.objects.create(
+            service_order=root_os, # Vincula à mãe
             motoboy_id=novo_motoboy_id,
             stop_type=RouteStop.StopType.TRANSFER,
             sequence=seq_transferencia,
-            failure_reason=local_transferencia_str, # Usando o campo para guardar o local de encontro temporariamente
+            failure_reason=f"Encontro: {local_transferencia_str}", # <--- CORRIGIDO AQUI!
             status=RouteStop.StopStatus.PENDENTE,
-            bloqueia_proxima=True # Não pode entregar se não pegar a carga do acidentado antes
+            bloqueia_proxima=True # OBRIGA o Motoboy B a pegar os itens antes de entregar!
         )
 
-        # 3. Transfere a posse lógica dos itens (Eles ficam em status 'TRANSFERIDO' até o novo confirmar a coleta)
-        # Nota: A posse_atual passa a ser None temporariamente ou do novo (depende da sua regra, recomendo None até ele aceitar)
+        # 3. Coloca os itens lógicamente no "limbo" (Transferido) até o B os pegar
+        # AQUI ESTÁ A CORREÇÃO (USO DO CONCAT DO DJANGO EM VEZ DO SINAL DE +)
         itens_em_posse.update(
             status=OSItem.ItemStatus.TRANSFERIDO,
-            item_notes=models.F('item_notes') + f"\n[ACIDENTE] Aguardando resgate em {local_transferencia_str}"
+            item_notes=Concat(
+                models.F('item_notes'), 
+                Value(f"\n[RESGATE] Transferido no local: {local_transferencia_str}")
+            )
         )
         
-        os_atual.operational_notes += f"\n[TRANSFERÊNCIA] Criada parada de resgate em {local_transferencia_str}."
+        root_os.operational_notes += f"\n[TRANSFERÊNCIA] Criada parada de resgate em {local_transferencia_str}."
+        novo_status_os = 'COLETADO'
 
-    # Finaliza a ocorrência da parada atual do motoboy acidentado
-    parada_acidente = ocorrencia.parada
-    parada_acidente.status = RouteStop.StopStatus.CANCELADA
-    parada_acidente.is_completed = True # Tira da tela do acidentado
-    parada_acidente.completed_at = timezone.now()
-    parada_acidente.save()
-
+    # 4. Resolve a ocorrência (Tira o Motoboy A do castigo sem apagar as paradas que transferimos)
     ocorrencia.resolvida = True
     ocorrencia.save()
-    os_atual.save()
+
+    # Atualiza todas as OS agrupadas com o novo motoboy e status
+    grouped_orders.update(motoboy_id=novo_motoboy_id, status=novo_status_os)
+    
+    root_os.status = novo_status_os
+    root_os.motoboy_id = novo_motoboy_id
+    root_os.save()
     
     return True

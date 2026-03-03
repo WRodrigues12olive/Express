@@ -83,22 +83,24 @@
 
                     <div class="flex-grow-1 overflow-y-auto custom-scrollbar pe-2 d-flex flex-column gap-3">
                         {% for os in pending_orders %}
-                        <div class="bg-white p-3 rounded-3 border border-light shadow-sm draggable-card drop-zone-os transition-all sla-tracker" 
-                             data-timestamp="{{ os.created_at.timestamp }}"
-                             style="border-left: 4px solid {% if os.priority == 'URGENTE' %}#ef4444{% else %}#3b82f6{% endif %} !important;"
-                             draggable="true" 
-                             ondragstart="drag(event, '{{ os.id }}')"
-                             ondragover="allowOsDrop(event)"
-                             ondragleave="leaveOsDrop(event)"
-                             ondrop="dropMerge(event, '{{ os.id }}')">
+                        <div class="p-3 rounded-3 shadow-sm draggable-card drop-zone-os transition-all {% if os.ocorrencias.all %}bg-warning bg-opacity-10 border border-warning border-opacity-50{% else %}bg-white border border-light{% endif %}" 
+                            style="border-left: 4px solid {% if os.ocorrencias.all %}#eab308{% elif os.priority == 'URGENTE' %}#ef4444{% else %}#3b82f6{% endif %} !important;"
+                            draggable="true" 
+                            ondragstart="drag(event, '{{ os.id }}')"
+                            ondragover="allowOsDrop(event)"
+                            ondragleave="leaveOsDrop(event)"
+                            ondrop="dropMerge(event, '{{ os.id }}')">
                             
                             <div class="d-flex justify-content-between align-items-start mb-2">
                                 <div class="d-flex align-items-center gap-2 flex-wrap">
                                     <i class="bi bi-grip-vertical text-muted"></i>
                                     <span class="fw-bold font-monospace text-dark">{{ os.os_number }}</span>
-                                    <span class="badge sla-badge bg-light text-secondary border ms-1" style="font-size: 0.6rem;">
-                                        <i class="bi bi-hourglass-split"></i> <span class="sla-text">0m</span>
-                                    </span>
+                                    
+                                    {% if os.ocorrencias.all %}
+                                        <span class="badge bg-warning text-dark border border-warning border-opacity-50" style="font-size: 0.65rem;">
+                                            <i class="bi bi-arrow-return-left"></i> Retornou p/ Fila
+                                        </span>
+                                    {% endif %}
                                     
                                     {% if os.child_orders.all %}
                                         <span class="badge bg-purple text-dark border border-purple border-opacity-25" style="background-color: #e9d5ff; color: #6b21a8;">
@@ -237,6 +239,30 @@
                                 </div>
                             </div>
                             {% endwith %}
+                            {% elif data.waiting_rescue_stops %}
+                            {% with socorro=data.waiting_rescue_stops|first %}
+                            <div class="bg-white rounded-4 border border-warning border-opacity-50 shadow-sm overflow-hidden mb-1">
+                                <div class="card-body p-3">
+                                    <div class="d-flex justify-content-between align-items-center mb-3">
+                                        <h6 class="fw-bold mb-0 text-dark d-flex align-items-center gap-2" style="font-size: 0.95rem;">
+                                            <i class="bi bi-person-circle fs-5 text-warning"></i> {{ data.profile.user.first_name }}
+                                        </h6>
+                                        <span class="badge bg-warning bg-opacity-10 text-dark border border-warning border-opacity-50 px-2 py-1">
+                                            OS {{ socorro.service_order.os_number }}
+                                        </span>
+                                    </div>
+
+                                    <div class="alert alert-warning p-2 mb-2 small fw-bold d-flex align-items-center gap-2">
+                                        <i class="bi bi-cone-striped"></i> AGUARDANDO SOCORRO / TRANSFERÊNCIA
+                                    </div>
+
+                                    <div class="p-2 rounded-3 bg-slate-50 border border-slate-200">
+                                        <p class="small text-slate-800 mb-0 fw-bold mt-1">Motoboy antigo aguardando transferência da carga.</p>
+                                        <p class="text-slate-500 mb-0" style="font-size: 0.75rem;">{{ socorro.failure_reason }}</p>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endwith %}
                             {% endif %}
                         {% empty %}
                         <div class="h-100 d-flex flex-column align-items-center justify-content-center text-muted opacity-50 text-center px-4">
@@ -362,9 +388,14 @@
                 <button type="button" class="btn btn-light text-danger fw-bold border rounded-3 hover-bg-danger" onclick="confirmCancelOS()">
                     <i class="bi bi-x-circle"></i> Cancelar OS
                 </button>
-                <button type="button" class="btn btn-slate-900 bg-slate-900 text-white fw-bold px-4 rounded-3 shadow-sm" data-bs-dismiss="modal">Fechar Detalhes</button>
+                
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-outline-primary fw-bold px-4 rounded-3 shadow-sm d-flex align-items-center gap-2" onclick="verOSCompleta()">
+                        <i class="bi bi-file-earmark-text"></i> Ver OS Completa
+                    </button>
+                    <button type="button" class="btn btn-slate-900 bg-slate-900 text-white fw-bold px-4 rounded-3 shadow-sm" data-bs-dismiss="modal">Fechar Detalhes</button>
+                </div>
             </div>
-
         </div>
     </div>
 </div>
@@ -565,6 +596,11 @@
                     <button onclick="toggleTransferBox()" class="btn btn-light border fw-bold p-3 text-start hover-bg-light transition-all">
                         <i class="bi bi-truck text-danger fs-5 me-2 align-middle"></i> 
                         Transferir Rota (Motoboy acidentado / avaria)
+                    </button>
+
+                    <button onclick="submitDecision('VOLTAR_FILA')" class="btn btn-light border fw-bold p-3 text-start hover-bg-light transition-all">
+                        <i class="bi bi-arrow-up-circle text-info fs-5 me-2 align-middle"></i> 
+                        Desvincular Motoboy e Devolver para a Fila (Aguardando)
                     </button>
                 </div>
 

@@ -1,5 +1,6 @@
 const myOrders = window.MOTOBOY_ORDERS || [];
 let activeOs = null;
+const isActionableStop = (stop) => !stop.is_completed && !stop.is_waiting_rescue && !(stop.is_failed && !stop.bloqueia_proxima);
 
 function renderList() {
     const container = document.getElementById('os-list-container');
@@ -18,11 +19,12 @@ function renderList() {
     }
 
     myOrders.forEach((os, index) => {
-        const entregasPendentes = os.stops.filter(s => !s.is_completed && s.type === 'ENTREGA');
+        const entregasPendentes = os.stops.filter(s => isActionableStop(s) && s.type === 'ENTREGA');
         totalEntregasPendentes += entregasPendentes.length;
         
-        const paradasPendentes = os.stops.filter(s => !s.is_completed);
+        const paradasPendentes = os.stops.filter(isActionableStop);
         const nextStop = paradasPendentes.length > 0 ? paradasPendentes[0] : null;
+        const hasWaitingRescue = os.stops.some(s => !s.is_completed && s.is_waiting_rescue);
         
         // Lógica de cores e ícones atualizada
         let iconBgClass, iconColorClass, iconClass;
@@ -74,6 +76,8 @@ function renderList() {
                     </div>
                 </div>`;
             }
+        } else if (hasWaitingRescue) {
+            nextStopHTML = `<div class="alert alert-warning py-2 mb-0 mt-2 small fw-bold text-center border-warning"><i class="bi bi-cone-striped"></i> Aguardando socorro / transferência de carga</div>`;
         } else {
             nextStopHTML = `<div class="alert alert-success py-2 mb-0 mt-2 small fw-bold text-center"><i class="bi bi-check-circle"></i> Rota Finalizada</div>`;
         }
@@ -126,7 +130,7 @@ function abrirModalOcorrencia() {
         return;
     }
     
-    const currentStopIndex = activeOs.stops.findIndex(s => !s.is_completed);
+    const currentStopIndex = activeOs.stops.findIndex(isActionableStop);
     if (currentStopIndex === -1) {
         console.error("Erro: Nenhuma parada pendente.");
         return;
@@ -194,8 +198,9 @@ function openOS(id) {
     
     activeOs = myOrders.find(o => o.id === id);
     
-    const currentStopIndex = activeOs.stops.findIndex(s => !s.is_completed);
+    const currentStopIndex = activeOs.stops.findIndex(isActionableStop);
     const currentStop = currentStopIndex !== -1 ? activeOs.stops[currentStopIndex] : null;
+    const hasWaitingRescue = activeOs.stops.some(s => !s.is_completed && s.is_waiting_rescue);
     const isDelivery = currentStop && currentStop.type === 'ENTREGA';
 
     document.getElementById('exec-os-number').innerText = activeOs.os_number;
@@ -306,13 +311,23 @@ function openOS(id) {
         bottomAction.classList.remove('d-none');
 
     } else {
-        cardContainer.innerHTML = `
-            <div class="bg-success text-white p-4 rounded-4 text-center shadow-sm">
-                <i class="bi bi-check-circle fs-1 mb-2"></i>
-                <h4 class="fw-bold">OS Finalizada!</h4>
-                <p class="small text-white-50 mb-0">Todas as etapas concluídas com sucesso.</p>
-            </div>
-        `;
+        if (hasWaitingRescue) {
+            cardContainer.innerHTML = `
+                <div class="bg-warning text-dark p-4 rounded-4 text-center shadow-sm">
+                    <i class="bi bi-cone-striped fs-1 mb-2"></i>
+                    <h4 class="fw-bold">Aguardando Socorro</h4>
+                    <p class="small mb-0">Esta OS está em transferência de carga. Aguarde ação do despachante/socorrista.</p>
+                </div>
+            `;
+        } else {
+            cardContainer.innerHTML = `
+                <div class="bg-success text-white p-4 rounded-4 text-center shadow-sm">
+                    <i class="bi bi-check-circle fs-1 mb-2"></i>
+                    <h4 class="fw-bold">OS Finalizada!</h4>
+                    <p class="small text-white-50 mb-0">Todas as etapas concluídas com sucesso.</p>
+                </div>
+            `;
+        }
         bottomAction.classList.add('d-none');
     }
 
@@ -336,7 +351,7 @@ function openOS(id) {
             dotClass = 'bg-white border-primary border-3';
             iconHTML = '<div class="bg-primary rounded-circle" style="width: 8px; height: 8px;"></div>';
         } else {
-            dotClass = 'bg-slate-50 border-secondary border-2';
+            dotClass = 'bg-light border-slate-300';
             iconHTML = '';
         }
         
@@ -384,7 +399,7 @@ function copiarReferencia(texto) {
 
 function confirmarEtapa() {
     if (!activeOs) return;
-    const currentStopIndex = activeOs.stops.findIndex(s => !s.is_completed);
+    const currentStopIndex = activeOs.stops.findIndex(isActionableStop);
     if (currentStopIndex === -1) return;
     const currentStop = activeOs.stops[currentStopIndex];
 

@@ -79,7 +79,7 @@
                 <div class="card-body p-4">
                     <div class="row g-3">
                         <div class="col-12"><input type="text" id="orig_name" class="form-control input-custom" placeholder="Nome do Local de Retirada *" required></div>
-                        <div class="col-md-3"><input type="text" id="orig_zip" class="form-control input-custom" placeholder="CEP" maxlength="9" oninput="this.value = formatCEP(this.value)" onkeyup="buscarCEP(this, 'origem')"></div>
+                        <div class="col-md-3"><input type="text" id="orig_zip" class="form-control input-custom" placeholder="CEP" maxlength="9" oninput="this.value = formatCEP(this.value); buscarCEP(this, 'origem')"></div>
                         <div class="col-md-7"><input type="text" id="orig_street" class="form-control input-custom" placeholder="Rua *" required></div>
                         <div class="col-md-2"><input type="text" id="orig_number" class="form-control input-custom" placeholder="Número *" required></div>
                         <div class="col-md-5"><input type="text" id="orig_district" class="form-control input-custom" placeholder="Bairro *" required></div>
@@ -183,7 +183,7 @@
         <div class="row g-2 mb-3">
             <div class="col-md-6"><input type="text" class="form-control input-custom loc-name" placeholder="Destinatário (Nome/Empresa) *" required></div>
             <div class="col-md-6"><input type="text" class="form-control input-custom loc-phone" placeholder="Telefone no Local *" maxlength="15" required oninput="this.value = formatPhone(this.value)"></div>
-            <div class="col-md-3"><input type="text" class="form-control input-custom loc-cep" placeholder="CEP *" maxlength="9" required oninput="this.value = formatCEP(this.value)" onkeyup="buscarCEP(this, 'destino', this.closest('.location-card'))"></div>
+            <div class="col-md-3"><input type="text" class="form-control input-custom loc-cep" placeholder="CEP *" maxlength="9" required oninput="this.value = formatCEP(this.value); buscarCEP(this, 'destino', this.closest('.location-card'))"></div>
             <div class="col-md-7"><input type="text" class="form-control input-custom loc-street" placeholder="Endereço Completo (Rua/Av) *" required></div>
             <div class="col-md-2"><input type="text" class="form-control input-custom loc-num" placeholder="Número *" required></div>
             <div class="col-md-4"><input type="text" class="form-control input-custom loc-comp" placeholder="Complemento (Sala, Apto...)"></div>

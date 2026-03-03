@@ -11,7 +11,7 @@ from .forms import ServiceOrderForm
 from django.utils import timezone
 from logistics.models import MotoboyProfile
 from django.core.cache import cache
-from django.db.models import Q, F
+from django.db.models import Q, F, Count
 from django.db import transaction
 from orders.models import Occurrence, DispatcherDecision
 from orders.services import transferir_rota_por_acidente
@@ -63,29 +63,30 @@ def resolve_occurrence_view(request, occurrence_id):
             return JsonResponse({'status': 'success', 'message': 'Rota transferida com sucesso!'})
 
         elif acao == DispatcherDecision.Acao.REAGENDAR:
-            # O despachante diz ao motoboy "Tenta de novo" ou "Ignora o erro por agora"
             parada.is_failed = False
             parada.bloqueia_proxima = False
             parada.status = RouteStop.StopStatus.PENDENTE
             parada.failure_reason = ""
             parada.save()
             
-            os_atual.status = ServiceOrder.Status.ACCEPTED # Volta ao normal
-            os_atual.save()
+            root_os = os_atual.parent_os or os_atual
+            grouped_orders = ServiceOrder.objects.filter(Q(id=root_os.id) | Q(parent_os=root_os))
+            
+            group_stops = RouteStop.objects.filter(service_order__in=grouped_orders)
+            new_status = 'COLETADO' if group_stops.filter(stop_type='COLETA', is_completed=True).exists() else 'ACEITO'
+            grouped_orders.update(status=new_status)
 
             DispatcherDecision.objects.create(
                 occurrence=ocorrencia, acao=acao, 
                 detalhes="O despachante mandou re-tentar ou ignorar o bloqueio.", 
                 decidido_por=request.user
             )
-            
             ocorrencia.resolvida = True
             ocorrencia.save()
 
         elif acao == DispatcherDecision.Acao.RETORNAR:
-            # Agendar devolução (falha definitiva na entrega)
             parada.is_failed = True
-            parada.is_completed = True # Tira da frente do motoboy
+            parada.is_completed = True
             parada.completed_at = timezone.now()
             parada.status = RouteStop.StopStatus.COM_OCORRENCIA
             parada.save()
@@ -106,6 +107,53 @@ def resolve_occurrence_view(request, occurrence_id):
                 decidido_por=request.user
             )
             
+            ocorrencia.resolvida = True
+            ocorrencia.save()
+
+            root_os = os_atual.parent_os or os_atual
+            grouped_orders = ServiceOrder.objects.filter(Q(id=root_os.id) | Q(parent_os=root_os))
+            grouped_orders.update(status='COLETADO')
+
+        elif acao == 'VOLTAR_FILA':
+            root_os = os_atual.parent_os or os_atual
+            grouped_orders = ServiceOrder.objects.filter(Q(id=root_os.id) | Q(parent_os=root_os))
+
+            # Atualiza a raiz na memória para não gerar OS Fantasma
+            root_os.status = 'PENDENTE'
+            root_os.motoboy = None
+            root_os.operational_notes += f"\n[🔄 VOLTOU À FILA] A OS retornou para Aguardando. Motivo: {ocorrencia.get_causa_display()}."
+            root_os.save()
+
+            # Atualiza as filhas
+            grouped_orders.exclude(id=root_os.id).update(status='PENDENTE', motoboy=None)
+
+            # Reseta as paradas para a fila
+            RouteStop.objects.filter(
+                service_order__in=grouped_orders,
+                is_completed=False
+            ).update(
+                motoboy=None,
+                is_failed=False,
+                failure_reason="",
+                status=RouteStop.StopStatus.PENDENTE,
+                bloqueia_proxima=False
+            )
+
+            # Reseta a posse dos itens para a base
+            OSItem.objects.filter(
+                order__in=grouped_orders,
+                posse_atual=ocorrencia.motoboy
+            ).update(
+                status=OSItem.ItemStatus.NAO_COLETADO,
+                posse_atual=None
+            )
+
+            DispatcherDecision.objects.create(
+                occurrence=ocorrencia, acao=acao, 
+                detalhes="Motoboy desvinculado. OS devolvida para a fila Aguardando.", 
+                decidido_por=request.user
+            )
+
             ocorrencia.resolvida = True
             ocorrencia.save()
 
@@ -147,13 +195,47 @@ def admin_dashboard_view(request):
     if not (request.user.type == 'ADMIN' or request.user.is_superuser):
         return redirect('root')
 
+    # 1. KPIs Gerais da Operação
+    total_os = ServiceOrder.objects.count()
+    os_completed = ServiceOrder.objects.filter(status='ENTREGUE').count()
+    os_canceled = ServiceOrder.objects.filter(status='CANCELADO').count()
+    os_progress = ServiceOrder.objects.filter(status__in=['ACEITO', 'COLETADO', 'OCORRENCIA']).count()
+    
+    empresas_ativas = CustomUser.objects.filter(type='COMPANY', is_active=True).count()
+    motoboys_ativos = MotoboyProfile.objects.filter(is_available=True).count()
+
+    # 2. Alertas (Ocorrências Críticas Pendentes)
+    alertas = Occurrence.objects.filter(resolvida=False).select_related('service_order', 'motoboy').order_by('-urgencia', '-criado_em')[:5]
+
+    # 3. Visão Global (Últimas 20 OS)
+    recent_orders = ServiceOrder.objects.select_related('client', 'motoboy').order_by('-created_at')[:20]
+
+    # 4. Ranking de Motoboys (Ordenado por total de entregas)
+    motoboys_ranking = MotoboyProfile.objects.select_related('user').annotate(
+        total_entregas=Count('deliveries', filter=Q(deliveries__status='ENTREGUE')),
+        em_andamento=Count('deliveries', filter=Q(deliveries__status__in=['ACEITO', 'COLETADO']))
+    ).order_by('-total_entregas')[:15]
+
+    # 5. Ranking de Empresas (Volume de pedidos)
+    companies_ranking = CustomUser.objects.filter(type='COMPANY').annotate(
+        total_pedidos=Count('orders'),
+        concluidas=Count('orders', filter=Q(orders__status='ENTREGUE')),
+        canceladas=Count('orders', filter=Q(orders__status='CANCELADO'))
+    ).order_by('-total_pedidos')[:15]
+
     context = {
-        'total_users': CustomUser.objects.count(),
-        'total_os': ServiceOrder.objects.count(),
-        'os_pending': ServiceOrder.objects.filter(status='PENDENTE').count(),
-        'os_completed': ServiceOrder.objects.filter(status='ENTREGUE').count(),
-        # Trazemos as últimas 5 OS para visualização rápida
-        'recent_orders': ServiceOrder.objects.all().order_by('-created_at')[:5]
+        'kpis': {
+            'total_os': total_os,
+            'os_completed': os_completed,
+            'os_canceled': os_canceled,
+            'os_progress': os_progress,
+            'empresas_ativas': empresas_ativas,
+            'motoboys_ativos': motoboys_ativos,
+        },
+        'alertas': alertas,
+        'recent_orders': recent_orders,
+        'motoboys': motoboys_ranking,
+        'companies': companies_ranking,
     }
     return render(request, 'orders/admin_dashboard.html', context)
 
@@ -282,15 +364,26 @@ def dispatch_dashboard_view(request):
         last_seen = cache.get(f'seen_{mb.user.id}')
         is_online = mb.is_available and bool(last_seen)
 
-        # CORREÇÃO: Esconde a paragem "Aguardando Socorro" do motoboy antigo no painel do despachante!
-        ativas = mb.route_stops.filter(is_completed=False).exclude(failure_reason__icontains='[AGUARDANDO SOCORRO]').order_by('sequence')
+        # Paradas operacionais normais (não inclui placeholder de socorro)
+        ativas = mb.route_stops.filter(
+            is_completed=False
+        ).exclude(
+            failure_reason__icontains='[AGUARDANDO SOCORRO]'
+        ).order_by('sequence')
+
+        # Placeholder criado para o motoboy antigo enquanto aguarda socorrista
+        aguardando_socorro = mb.route_stops.filter(
+            is_completed=False,
+            failure_reason__icontains='[AGUARDANDO SOCORRO]'
+        ).order_by('sequence')
         
         motoboy_data.append({
             'profile': mb,
             'is_online': is_online,
-            'load': ativas.count(),
+            'load': ativas.count() + aguardando_socorro.count(),
             'max_load': 10,
             'active_stops': ativas,
+            'waiting_rescue_stops': aguardando_socorro,
         })
         
     motoboy_data.sort(key=lambda x: x['is_online'], reverse=True)
@@ -585,9 +678,6 @@ def reorder_stops_view(request):
     data = json.loads(request.body or "{}")
     raw_ids = data.get('stops', [])
 
-    from orders.models import RouteStop
-
-    # Normaliza os IDs preservando a ordem (o JS manda strings às vezes)
     stop_ids = []
     for sid in raw_ids:
         try:
@@ -598,24 +688,32 @@ def reorder_stops_view(request):
     if not stop_ids:
         return JsonResponse({'status': 'error', 'message': 'Lista de paradas vazia.'}, status=400)
 
-    stops_meta = list(RouteStop.objects.filter(id__in=stop_ids).values('id', 'stop_type'))
-    id_to_type = {s['id']: s['stop_type'] for s in stops_meta}
+    # Busca as paradas e o ID da OS a que pertencem
+    stops_meta = list(RouteStop.objects.filter(id__in=stop_ids).values('id', 'stop_type', 'service_order_id'))
+    id_to_meta = {s['id']: s for s in stops_meta}
 
-    # Remove IDs inválidos/ausentes do banco, mantendo a ordem
-    stop_ids = [sid for sid in stop_ids if sid in id_to_type]
+    stop_ids = [sid for sid in stop_ids if sid in id_to_meta]
     if not stop_ids:
         return JsonResponse({'status': 'error', 'message': 'Nenhuma parada válida encontrada.'}, status=400)
 
-    # REGRA: sempre forçar COLETA como 1ª parada na ordenação
-    if not any(id_to_type[sid] == 'COLETA' for sid in stop_ids):
-        return JsonResponse({'status': 'error', 'message': 'A rota precisa conter uma parada de COLETA.'}, status=400)
+    # VALIDAÇÃO CRÍTICA (Nº 1): Coleta ANTES da Entrega/Devolução para cada OS individualmente
+    os_coleta_seen = set()
+    for sid in stop_ids:
+        meta = id_to_meta[sid]
+        os_id = meta['service_order_id']
+        stype = meta['stop_type']
+        
+        if stype == 'COLETA':
+            os_coleta_seen.add(os_id)
+        elif stype in ['ENTREGA', 'DEVOLUCAO']:
+            # Se tentou entregar antes de coletar esta OS específica, barra a ação!
+            if os_id not in os_coleta_seen:
+                return JsonResponse({
+                    'status': 'error', 
+                    'message': 'Ordem inválida! Uma Entrega ou Devolução não pode ocorrer antes da Coleta da sua respectiva OS.'
+                }, status=400)
 
-    if id_to_type.get(stop_ids[0]) != 'COLETA':
-        first_collection_id = next(sid for sid in stop_ids if id_to_type.get(sid) == 'COLETA')
-        stop_ids.remove(first_collection_id)
-        stop_ids.insert(0, first_collection_id)
-
-    # O Javascript manda a lista de IDs na nova ordem. A gente salva a nova sequência no banco (1, 2, 3...)
+    # Salva a nova sequência aprovada
     for index, stop_id in enumerate(stop_ids):
         RouteStop.objects.filter(id=stop_id).update(sequence=index + 1)
 
@@ -627,11 +725,16 @@ def motoboy_update_status(request, stop_id):
     if request.user.type != 'MOTOBOY':
         return redirect('root')
 
+    from orders.models import RouteStop, OSItem, ItemDistribution, ServiceOrder
+
     current_stop = get_object_or_404(RouteStop, id=stop_id, motoboy__user=request.user)
 
     if not current_stop.is_completed:
-        
-        # Lógica de salvar foto da entrega...
+        os = current_stop.service_order
+        root_os = os.parent_os or os
+        grouped_orders = ServiceOrder.objects.filter(Q(id=root_os.id) | Q(parent_os=root_os))
+
+        # 1. SE FOR ENTREGA: Tira a posse do motoboy e marca item como ENTREGUE
         if current_stop.stop_type == 'ENTREGA' and current_stop.destination:
             dest = current_stop.destination
             receiver_name = request.POST.get('receiver_name')
@@ -642,38 +745,59 @@ def motoboy_update_status(request, stop_id):
             dest.delivered_at = timezone.now()
             dest.save()
 
+            # Passa os itens deste destino específico para ENTREGUE
+            item_ids = ItemDistribution.objects.filter(destination=dest).values_list('item_id', flat=True)
+            OSItem.objects.filter(id__in=item_ids).update(
+                status=OSItem.ItemStatus.ENTREGUE, 
+                posse_atual=None  # Sai do baú do motoboy
+            )
+
         # Conclui a parada do motoboy atual
         current_stop.is_completed = True
         current_stop.completed_at = timezone.now()
         current_stop.save()
 
-        os = current_stop.service_order
-        
-        # --- A MÁGICA: LIBERA O MOTOBOY ANTIGO ---
-        # Se o motoboy NOVO confirmou que pegou a carga no encontro, o ANTIGO é dispensado.
+        # 2. SE FOR TRANSFERÊNCIA (O novo motoboy foi buscar a carga ao local do acidente)
         if current_stop.stop_type == 'TRANSFERENCIA':
+            # Liberta a paragem fantasma do motoboy antigo (acidentado)
             RouteStop.objects.filter(
-                Q(service_order=os) | Q(service_order__parent_os=os),
+                service_order__in=grouped_orders,
                 failure_reason__icontains="[AGUARDANDO SOCORRO]"
             ).update(is_completed=True, completed_at=timezone.now())
 
+            # O novo motoboy assume a posse física dos itens transferidos
+            OSItem.objects.filter(
+                order__in=grouped_orders,
+                status=OSItem.ItemStatus.TRANSFERIDO
+            ).update(
+                status=OSItem.ItemStatus.COLETADO,
+                posse_atual=current_stop.motoboy
+            )
+            messages.success(request, f"Carga assumida com sucesso!")
+
+        # 3. SE FOR COLETA: O motoboy pegou a mercadoria na loja
         if current_stop.stop_type == 'COLETA':
             os.status = 'COLETADO'
             os.save()
-            messages.success(request, f"Coleta confirmada!")
             
-        elif current_stop.stop_type in ['ENTREGA', 'TRANSFERENCIA']:
-            # Verifica paradas SOMENTE deste motoboy para decidir se finalizou a rota dele
+            # Passa a posse lógica de TODOS os itens do grupo para este motoboy
+            OSItem.objects.filter(order__in=grouped_orders).update(
+                status=OSItem.ItemStatus.COLETADO,
+                posse_atual=current_stop.motoboy
+            )
+            messages.success(request, f"Coleta confirmada! Os itens estão agora em sua posse.")
+            
+        elif current_stop.stop_type in ['ENTREGA', 'DEVOLUCAO']:
+            # Verifica se ele ainda tem paragens
             paradas_restantes = RouteStop.objects.filter(
-                Q(service_order=os) | Q(service_order__parent_os=os),
+                service_order__in=grouped_orders,
                 motoboy=current_stop.motoboy,
                 is_completed=False
             ).count()
             
             if paradas_restantes == 0:
-                # Só finaliza a OS no painel se NINGUÉM mais tiver paradas (nem o antigo, nem o novo)
                 total_geral_restantes = RouteStop.objects.filter(
-                    Q(service_order=os) | Q(service_order__parent_os=os), is_completed=False
+                    service_order__in=grouped_orders, is_completed=False
                 ).count()
                 
                 if total_geral_restantes == 0:
@@ -1001,3 +1125,29 @@ def create_return_view(request, os_id):
         root_os.save()
 
     return JsonResponse({'status': 'success'})
+
+@login_required
+def os_details_view(request, os_id):
+    """ Exibe a visão completa e detalhada de uma OS (Itens, Destinos, Pesos, etc) """
+    os_obj = get_object_or_404(ServiceOrder, id=os_id)
+    
+    # Segurança: Apenas quem tem direito pode ver
+    if request.user.type not in ['ADMIN', 'DISPATCHER'] and not request.user.is_superuser:
+        if request.user.type == 'COMPANY' and os_obj.client != request.user:
+            return redirect('root')
+        elif request.user.type == 'MOTOBOY' and os_obj.motoboy != request.user.motoboy_profile:
+            return redirect('root')
+            
+    # Busca os relacionamentos
+    items = os_obj.items.all()
+    destinations = os_obj.destinations.all()
+    stops = os_obj.stops.all().order_by('sequence')
+    
+    context = {
+        'os': os_obj,
+        'items': items,
+        'destinations': destinations,
+        'stops': stops,
+    }
+    
+    return render(request, 'orders/os_details.html', context)

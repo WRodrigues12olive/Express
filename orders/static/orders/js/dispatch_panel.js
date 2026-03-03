@@ -17,39 +17,6 @@ function getCSRFToken() {
     return cookieValue;
 }
 
-// ====================================================
-// LÓGICA DE SLA (TEMPO NA FILA)
-// ====================================================
-function updateSLAs() {
-    const now = Math.floor(Date.now() / 1000);
-    document.querySelectorAll('.sla-tracker').forEach(card => {
-        const timestamp = parseInt(card.getAttribute('data-timestamp'));
-        if(!timestamp) return;
-        
-        const diffMinutes = Math.floor((now - timestamp) / 60);
-        const badge = card.querySelector('.sla-badge');
-        const text = card.querySelector('.sla-text');
-        
-        if(text) text.innerText = diffMinutes + 'm';
-        
-        if (diffMinutes >= 60) {
-            card.classList.add('sla-critical');
-            if(badge) {
-                badge.classList.replace('bg-light', 'bg-danger');
-                badge.classList.replace('text-secondary', 'text-white');
-            }
-            if(text) text.innerText = diffMinutes + 'm 🔥';
-        } else if (diffMinutes >= 30) {
-            card.classList.add('sla-warning');
-            if(badge) {
-                badge.classList.replace('bg-light', 'bg-warning');
-                badge.classList.replace('text-secondary', 'text-dark');
-            }
-        }
-    });
-}
-setInterval(updateSLAs, 60000);
-setTimeout(updateSLAs, 1000);
 
 // ====================================================
 // MODAL DETALHES E ATRIBUIÇÃO (OS AGUARDANDO)
@@ -143,6 +110,11 @@ function confirmCancelOS() {
     }
 }
 
+function verOSCompleta() {
+    if (!currentModalOsId) return;
+    // Redireciona para a nova página de detalhes completos da OS
+    window.location.href = `/os/${currentModalOsId}/detalhes/`;
+}
 // ====================================================
 // NOVO SISTEMA DE OCORRÊNCIAS (FASE 4)
 // ====================================================
@@ -369,16 +341,7 @@ function fetchAndRenderStops(osId) {
             onStart: function() { isInteracting = true; },
             onEnd: function() {
                 isInteracting = false;
-                const items = Array.from(list.children);
-
-                // Regra de negócio: COLETA deve ser sempre a primeira parada na ordenação
-                if (items.length > 0 && items[0].dataset.type !== 'COLETA') {
-                    const coletaItem = items.find(el => el.dataset.type === 'COLETA');
-                    if (coletaItem) {
-                        list.insertBefore(coletaItem, list.firstChild);
-                    }
-                }
-
+                
                 let stopIds = Array.from(list.children)
                     .map(item => item.dataset.id)
                     .filter(id => id !== undefined && id !== null && id !== "");
@@ -392,9 +355,16 @@ function fetchAndRenderStops(osId) {
                         'X-CSRFToken': getCSRFToken()
                     },
                     body: JSON.stringify({ stops: stopIds })
-                }).then(res => {
-                    if (res.ok) fetchAndRenderStops(osId); 
-                    else alert("Erro ao salvar a ordem das rotas no banco.");
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        fetchAndRenderStops(osId); 
+                    } else {
+                        // Se der erro (ex: colocou entrega antes de coleta), exibe o aviso e reverte a UI
+                        alert("⚠️ " + data.message);
+                        fetchAndRenderStops(osId);
+                    }
                 });
             }
         });
@@ -441,8 +411,6 @@ function autoRefreshDashboard() {
             document.getElementById('col-frota').innerHTML = doc.getElementById('col-frota').innerHTML;
             document.getElementById('col-aguardando').innerHTML = doc.getElementById('col-aguardando').innerHTML;
             document.getElementById('col-atendimento').innerHTML = doc.getElementById('col-atendimento').innerHTML;
-            
-            updateSLAs();
         })
         .catch(error => console.log('Silencioso: Falha na autossincronização', error));
 }
