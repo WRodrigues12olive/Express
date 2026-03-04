@@ -38,6 +38,7 @@ urlpatterns = [
     path('minhas-entregas/problema/<int:stop_id>/', report_problem_view, name='report_problem'),
     path('motoboy/perfil/', views.motoboy_profile_view, name='motoboy_profile'),   
     path('motoboy/heartbeat/', views.motoboy_heartbeat_view, name='motoboy_heartbeat'),
+    path('motoboy/fix-vehicle/', views.motoboy_fix_vehicle_view, name='fix_vehicle'),
     
     # Despacho (Ações)
     path('painel-despacho/atribuir/<int:os_id>/', assign_motoboy_view, name='assign_motoboy'),
