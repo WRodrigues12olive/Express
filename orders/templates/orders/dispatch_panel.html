@@ -334,7 +334,7 @@
                     <div class="col-md-6">
                         <div class="bg-white p-4 rounded-3 border shadow-sm h-100">
                             <h6 class="text-slate-800 fw-bold text-uppercase mb-3 small d-flex align-items-center gap-2">
-                                <i class="bi bi-geo-alt-fill text-primary"></i> Local de Coleta
+                                <i class="bi bi-geo-alt-fill text-brand-primary"></i> Local de Coleta
                             </h6>
                             <div class="bg-slate-50 p-3 rounded-3 border border-slate-200">
                                 <p class="fw-bold text-dark mb-1 fs-6" id="modalDispOriginName">Local</p>
@@ -365,12 +365,12 @@
                     </p>
                 </div>
                 
-                <div class="mt-4 bg-primary bg-opacity-10 p-4 rounded-4 border border-primary border-opacity-25" id="modalAssignBox">
-                    <h6 class="text-primary fw-bold text-uppercase mb-3 small d-flex align-items-center gap-2">
+                <div class="mt-4 p-4 rounded-4 border" id="modalAssignBox" style="background-color: var(--primary-light); border-color: var(--primary-border); border-radius: 12px;">
+                    <h6 class="fw-bold text-uppercase mb-3 small d-flex align-items-center gap-2" style="color: var(--primary-color);">
                         <i class="bi bi-truck"></i> Atribuição Rápida
                     </h6>
                     <div class="d-flex gap-2">
-                        <select id="modalCourierSelect" class="form-select border-primary shadow-sm fw-bold text-secondary">
+                        <select id="modalCourierSelect" class="form-select shadow-sm fw-bold" style="border-color: var(--primary-color); color: var(--primary-color);">
                             <option value="">Selecione um técnico disponível...</option>
                             {% for data in motoboy_data %}
                                 {% if data.is_online %}
@@ -687,6 +687,12 @@
                     </div>
 
                     <input type="hidden" id="localEncontro">
+                    <div class="form-check mt-3">
+                        <input class="form-check-input" type="checkbox" id="furar_fila" checked>
+                        <label class="form-check-label fw-bold text-danger" for="furar_fila">
+                            Urgência Máxima (Furar fila do novo motoboy)
+                        </label>
+                    </div>
                     <button onclick="submitTransfer()" class="btn btn-danger fw-bold w-100 shadow-sm mt-3">Confirmar Transferência de Carga</button>
                 </div>
 

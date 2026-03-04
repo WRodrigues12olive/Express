@@ -102,35 +102,35 @@
           </div>
 
           <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm relative overflow-hidden">
-            <div class="absolute top-0 left-0 w-1 h-full bg-emerald-500"></div>
+            <div class="absolute top-0 left-0 w-1 h-full" style="background-color: var(--color-success);"></div>
             <div class="flex justify-between items-start mb-2">
               <div>
-                <p class="text-sm font-medium text-slate-500 mb-1">OS Concluídas</p>
-                <h3 class="text-3xl font-bold text-slate-900 tracking-tight">{{ kpis.os_completed }}</h3>
+                <p class="text-sm font-medium mb-1" style="color: var(--text-muted);">OS Concluídas</p>
+                <h3 class="text-3xl font-bold tracking-tight" style="color: var(--text-color);">{{ kpis.os_completed }}</h3>
               </div>
-              <div class="p-2 bg-emerald-50 rounded-lg text-emerald-600"><i class="bi bi-check2-circle fs-5"></i></div>
+              <div class="p-2 rounded-lg" bg-emerald-50 rounded-lg text-emerald-600"><i class="bi bi-check2-circle fs-5"></i></div>
             </div>
           </div>
 
           <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm relative overflow-hidden">
-            <div class="absolute top-0 left-0 w-1 h-full bg-amber-500"></div>
+            <div class="absolute top-0 left-0 w-1 h-full" bg-amber-500"></div>
             <div class="flex justify-between items-start mb-2">
               <div>
-                <p class="text-sm font-medium text-slate-500 mb-1">OS em Andamento</p>
-                <h3 class="text-3xl font-bold text-slate-900 tracking-tight">{{ kpis.os_progress }}</h3>
+                <p class="text-sm font-medium mb-1" style="color: var(--text-muted);">OS em Andamento</p>
+                <h3 class="text-3xl font-bold tracking-tight" style="color: var(--text-color);">{{ kpis.os_progress }}</h3>
               </div>
-              <div class="p-2 bg-amber-50 rounded-lg text-amber-600"><i class="bi bi-bicycle fs-5"></i></div>
+              <div class="p-2 rounded-lg" bg-amber-50 rounded-lg text-amber-600"><i class="bi bi-bicycle fs-5"></i></div>
             </div>
           </div>
 
           <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm relative overflow-hidden">
-            <div class="absolute top-0 left-0 w-1 h-full bg-purple-500"></div>
+            <div class="absolute top-0 left-0 w-1 h-full" bg-purple-500"></div>
             <div class="flex justify-between items-start mb-2">
               <div>
-                <p class="text-sm font-medium text-slate-500 mb-1">Empresas / Motoboys</p>
-                <h3 class="text-3xl font-bold text-slate-900 tracking-tight">{{ kpis.empresas_ativas }} / {{ kpis.motoboys_ativos }}</h3>
+                <p class="text-sm font-medium mb-1" style="color: var(--text-muted);">Empresas / Motoboys</p>
+                <h3 class="text-3xl font-bold tracking-tight" style="color: var(--text-color);">{{ kpis.empresas_ativas }} / {{ kpis.motoboys_ativos }}</h3>
               </div>
-              <div class="p-2 bg-purple-50 rounded-lg text-purple-600"><i class="bi bi-people fs-5"></i></div>
+              <div class="p-2 rounded-lg" bg-purple-50 rounded-lg text-purple-600"><i class="bi bi-people fs-5"></i></div>
             </div>
           </div>
 
@@ -192,7 +192,7 @@
       <section class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
         
         <div class="flex overflow-x-auto border-b border-slate-200 bg-slate-50/50 hide-scrollbar">
-          <button data-target="global" onclick="switchTab('global')" class="tab-btn flex items-center gap-2 px-6 py-4 text-sm font-medium border-b-2 border-blue-600 text-blue-700 bg-white transition-colors whitespace-nowrap">
+          <button data-target="global" onclick="switchTab('global')" class="tab-btn flex items-center gap-2 px-6 py-4 text-sm font-medium border-b-2 bg-white transition-colors whitespace-nowrap" border-blue-600 text-blue-700>
             <i class="bi bi-file-earmark-text"></i> Visão Global OS
           </button>
           <button data-target="motoboys" onclick="switchTab('motoboys')" class="tab-btn flex items-center gap-2 px-6 py-4 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap">

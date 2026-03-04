@@ -176,9 +176,9 @@
 </template>
 
 <template id="location-template">
-    <div class="location-card position-relative bg-white border border-primary border-opacity-25 shadow-sm rounded-3 p-4" data-id="">
+    <div class="location-card position-relative bg-white border shadow-sm rounded-3 p-4" data-id="" style="border-color: var(--primary-border); border-radius: 12px;">
         <button type="button" class="btn-remove" onclick="removeLocation(this)"><i class="bi bi-trash fs-5"></i></button>
-        <h6 class="fw-bold text-primary mb-3"><i class="bi bi-flag-fill"></i> Dados do Destinatário</h6>
+        <h6 class="fw-bold mb-3 text-brand-primary"><i class="bi bi-flag-fill"></i> Dados do Destinatário</h6>
         
         <div class="row g-2 mb-3">
             <div class="col-md-6"><input type="text" class="form-control input-custom loc-name" placeholder="Destinatário (Nome/Empresa) *" required></div>

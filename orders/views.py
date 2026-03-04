@@ -53,12 +53,13 @@ def resolve_occurrence_view(request, occurrence_id):
         if acao == DispatcherDecision.Acao.TRANSFERIR_MOTOBOY:
             novo_motoboy_id = data.get('novo_motoboy_id')
             local_encontro = data.get('local_encontro', 'Base da Empresa')
+            furar_fila = bool(data.get('furar_fila', True))
             
             if not novo_motoboy_id:
                 return JsonResponse({'status': 'error', 'message': 'Selecione um motoboy.'}, status=400)
                 
             # Chama a função cirúrgica que criámos no services.py
-            transferir_rota_por_acidente(ocorrencia.id, novo_motoboy_id, local_encontro, request.user)
+            transferir_rota_por_acidente(ocorrencia.id, novo_motoboy_id, local_encontro, request.user, furar_fila)
             
             return JsonResponse({'status': 'success', 'message': 'Rota transferida com sucesso!'})
 
@@ -67,6 +68,7 @@ def resolve_occurrence_view(request, occurrence_id):
             incluir_novo_endereco = bool(data.get('incluir_novo_endereco'))
             novo_endereco = data.get('novo_endereco') or {}
 
+            # --- 1. LÓGICA DE ATUALIZAÇÃO DE ENDEREÇO (MANTIDA DO SEU CÓDIGO) ---
             if incluir_novo_endereco:
                 if ocorrencia.causa != Occurrence.Causa.NAO_LOCALIZADO:
                     return JsonResponse({
@@ -88,9 +90,6 @@ def resolve_occurrence_view(request, occurrence_id):
                 cep = (novo_endereco.get('cep') or '').strip()
                 complement = (novo_endereco.get('complement') or '').strip()
 
-                # Inteligente para o tipo da parada com problema:
-                # COLETA -> atualiza origem da OS da parada.
-                # ENTREGA -> atualiza destino vinculado a parada.
                 if parada.stop_type == RouteStop.StopType.COLLECTION:
                     os_alvo = parada.service_order
                     os_alvo.origin_street = street
@@ -123,26 +122,70 @@ def resolve_occurrence_view(request, occurrence_id):
                         'status': 'error',
                         'message': 'Novo endereco so pode ser aplicado em paradas de coleta ou entrega.'
                     }, status=400)
+            # --- FIM DA ATUALIZAÇÃO DE ENDEREÇO ---
 
-            parada.is_failed = False
-            parada.bloqueia_proxima = False
-            parada.status = RouteStop.StopStatus.PENDENTE
-            parada.failure_reason = ""
-
-            # Se o motoboy já estiver com outras paradas pendentes,
-            # manda esta tentativa para o final da fila dele.
+            # --- 2. REORDENAÇÃO INTELIGENTE DA ROTA ---
             if motoboy_da_parada:
-                outras_pendentes = RouteStop.objects.filter(
-                    motoboy=motoboy_da_parada,
-                    is_completed=False
-                ).exclude(id=parada.id)
+                with transaction.atomic():
+                    # Puxa a fila atual de paradas do motoboy
+                    paradas_pendentes = list(RouteStop.objects.filter(
+                        motoboy=motoboy_da_parada,
+                        is_completed=False
+                    ).order_by('sequence'))
 
-                if outras_pendentes.exists():
-                    ultima_seq = outras_pendentes.aggregate(max_seq=Max('sequence'))['max_seq'] or 0
-                    parada.sequence = ultima_seq + 1
+                    # MÁGICA AQUI: Salva os números de sequência originais que estão livres
+                    # Ex: se ele já fez a parada 1, isso vai salvar [2, 3, 4]
+                    sequencias_disponiveis = [p.sequence for p in paradas_pendentes if p.sequence < 900]
+                    sequencias_disponiveis.sort()
 
-            parada.save()
-            
+                    # Remove a parada atual da lista para reposicioná-la
+                    if parada in paradas_pendentes:
+                        paradas_pendentes.remove(parada)
+
+                    if parada.stop_type == 'COLETA':
+                        os_falha = parada.service_order
+                        
+                        if not paradas_pendentes:
+                            paradas_pendentes.append(parada)
+                        else:
+                            parada_atual = paradas_pendentes[0]
+                            # A coleta reagendada entra LOGO APÓS a tarefa que o motoboy faz agora
+                            paradas_pendentes.insert(1, parada)
+
+                            # Trava de Segurança: Se ele estiver indo entregar essa OS, a coleta PASSA NA FRENTE
+                            if parada_atual.service_order == os_falha and parada_atual.stop_type in ['ENTREGA', 'DEVOLUCAO']:
+                                paradas_pendentes.remove(parada)
+                                paradas_pendentes.insert(0, parada)
+                    else:
+                        # Se for ENTREGA que falhou, joga pro fim da fila pendente
+                        paradas_pendentes.append(parada)
+
+                    # Salva usando as sequências originais para não atropelar as concluídas!
+                    for index, p in enumerate(paradas_pendentes):
+                        is_target = (p.id == parada.id)
+                        
+                        # Garante que pega a sequência correta que estava disponível
+                        if index < len(sequencias_disponiveis):
+                            nova_seq = sequencias_disponiveis[index]
+                        else:
+                            nova_seq = (sequencias_disponiveis[-1] + 1) if sequencias_disponiveis else 1
+                        
+                        RouteStop.objects.filter(id=p.id).update(
+                            sequence=nova_seq,
+                            is_failed=False if is_target else p.is_failed,
+                            bloqueia_proxima=False if is_target else p.bloqueia_proxima,
+                            status=RouteStop.StopStatus.PENDENTE if is_target else p.status,
+                            failure_reason="" if is_target else p.failure_reason
+                        )
+            else:
+                # Caso extremo: não tem motoboy vinculado. Só limpa a parada.
+                parada.is_failed = False
+                parada.bloqueia_proxima = False
+                parada.status = RouteStop.StopStatus.PENDENTE
+                parada.failure_reason = ""
+                parada.save()
+
+            # --- 3. ATUALIZA OS STATUS DA OS E FINALIZA OCORRÊNCIA ---
             root_os = os_atual.parent_os or os_atual
             grouped_orders = ServiceOrder.objects.filter(Q(id=root_os.id) | Q(parent_os=root_os))
             
@@ -355,18 +398,16 @@ def os_create_view(request):
                 # 2. SALVA OS ITENS (Agora com Peso, Dimensões, Notas e Tipo)
                 items_dict = {} 
                 for item_data in data.get('items', []):
-                    # Como o peso pode vir vazio da tela, tratamos para não dar erro no banco decimal
                     peso_str = item_data.get('weight', '')
                     peso_val = float(peso_str) if peso_str else None
-                    
                     novo_item = OSItem.objects.create(
                         order=os,
                         description=item_data['description'],
                         total_quantity=item_data['quantity'],
-                        item_type=item_data.get('type', ''),         # NOVO
-                        weight=peso_val,                             # NOVO
-                        dimensions=item_data.get('dimensions', ''),  # NOVO
-                        item_notes=item_data.get('notes', '')        # NOVO
+                        item_type=item_data.get('type', ''),
+                        weight=peso_val,
+                        dimensions=item_data.get('dimensions', ''),
+                        item_notes=item_data.get('notes', '')
                     )
                     items_dict[item_data['id']] = novo_item
 
@@ -486,31 +527,24 @@ def dispatch_dashboard_view(request):
 def get_route_stops(request, os_id):
     """Retorna a rota de uma OS em JSON para montar a timeline no Modal"""
     os_alvo = get_object_or_404(ServiceOrder, id=os_id)
-    
-    # Importante: Usa o Q para pegar paradas da OS principal e das Filhas
-    from orders.models import RouteStop
     stops = RouteStop.objects.filter(
         Q(service_order=os_alvo) | Q(service_order__parent_os=os_alvo)
     ).order_by('sequence')
-    
     data = []
     for stop in stops:
-        # Puxa o nome e endereço originais (da OS dona daquela parada específica)
         if stop.stop_type == 'COLETA':
             location = stop.service_order.origin_name
             address = f"(OS {stop.service_order.os_number}) {stop.service_order.origin_street}, {stop.service_order.origin_number}"
         else:
             location = stop.destination.destination_name
             address = f"(OS {stop.service_order.os_number}) {stop.destination.destination_street}, {stop.destination.destination_number}"
-            
         data.append({
             'id': stop.id,
             'type': stop.stop_type,
             'sequence': stop.sequence,
             'location': location,
-            'address': address
+            'address': address,
         })
-        
     return JsonResponse({'status': 'success', 'stops': data})
 
 @login_required
@@ -637,6 +671,13 @@ def motoboy_tasks_view(request):
         parent_os__isnull=True
     ).distinct().order_by('created_at')
 
+    proxima_parada_global = RouteStop.objects.filter(
+        motoboy=perfil, 
+        is_completed=False
+    ).exclude(sequence=999).order_by('sequence').first()
+    
+    os_em_execucao_id = proxima_parada_global.service_order.id if proxima_parada_global else None
+
     ativas_data = []
     for os in ativas_qs:
         # 3. MANDA PARA A TELA SÓ AS PARADAS DESTE MOTOBOY (O novo não vê o que o antigo já fez)
@@ -646,13 +687,24 @@ def motoboy_tasks_view(request):
         ).order_by('sequence')
         
         filhas = os.child_orders.all()
+
+        # MÁGICA INVISÍVEL: Verifica se a OS está a aguardar o despachante (só tem paragens 999)
+        ta_pausada = not stops.filter(is_completed=False).exclude(sequence=999).exists()
         
         ativas_data.append({
             'os': os,
             'stops': stops,
             'has_children': filhas.exists(),
-            'child_numbers': [f.os_number for f in filhas]
+            'child_numbers': [f.os_number for f in filhas],
+            'ta_pausada': ta_pausada,
+            'eh_a_atual': (os.id == os_em_execucao_id)
         })
+
+    ativas_data.sort(key=lambda x: (
+        x['ta_pausada'], 
+        not x['eh_a_atual'], 
+        x['os'].created_at
+    ))
 
     entregas_concluidas_hoje = RouteStop.objects.filter(
         motoboy=perfil, stop_type='ENTREGA', is_completed=True, is_failed=False, completed_at__date=timezone.now().date()
@@ -703,7 +755,7 @@ def motoboy_profile_view(request):
 
     context = {
         'perfil': perfil,
-        'is_first_access': is_first_access
+        'is_first_access': is_first_access,
     }
     return render(request, 'orders/motoboy_profile.html', context)
 
@@ -842,8 +894,13 @@ def motoboy_update_status(request, stop_id):
             # Liberta a paragem fantasma do motoboy antigo (acidentado)
             RouteStop.objects.filter(
                 service_order__in=grouped_orders,
-                failure_reason__icontains="[AGUARDANDO SOCORRO]"
-            ).update(is_completed=True, completed_at=timezone.now())
+                stop_type='TRANSFERENCIA',
+                is_completed=False
+            ).exclude(motoboy=current_stop.motoboy).update(
+                is_completed=True,
+                status=RouteStop.StopStatus.CONCLUIDA,
+                completed_at=timezone.now()
+            )
 
             # O novo motoboy assume a posse física dos itens transferidos
             OSItem.objects.filter(
@@ -857,8 +914,8 @@ def motoboy_update_status(request, stop_id):
 
         # 3. SE FOR COLETA: O motoboy pegou a mercadoria na loja
         if current_stop.stop_type == 'COLETA':
-            os.status = 'COLETADO'
-            os.save()
+            # Atualiza o status de todas as OS agrupadas (mãe e filhas)
+            grouped_orders.update(status='COLETADO')
             
             # Passa a posse lógica de TODOS os itens do grupo para este motoboy
             OSItem.objects.filter(order__in=grouped_orders).update(
@@ -984,9 +1041,13 @@ def report_problem_view(request, stop_id):
     current_stop.status = RouteStop.StopStatus.COM_OCORRENCIA
     current_stop.is_failed = True
     current_stop.failure_reason = f"{ocorrencia.get_causa_display()}"
-    
     # Se for acidente, bloqueia a rota na marra. Se não for, respeita o que o motoboy marcou.
     current_stop.bloqueia_proxima = True if causa == 'ACIDENTE' else not pode_seguir
+    # Se o motoboy pode continuar trabalhando, tira essa parada da frente dele.
+    if not current_stop.bloqueia_proxima:
+        # Sequência alta (999) para que outras OS apareçam primeiro na fila.
+        current_stop.sequence = 999
+
     current_stop.save()
 
     # 5. Atualiza o status da OS Mãe e das filhas para OCORRENCIA (para o despachante ver)
@@ -998,6 +1059,12 @@ def report_problem_view(request, stop_id):
     nova_nota = f"\n[🚨 OCORRÊNCIA - {current_stop.get_stop_type_display()}] Motivo: {ocorrencia.get_causa_display()}."
     root_os.operational_notes += nova_nota
     root_os.save()
+
+    # 6. Se for ACIDENTE (veículo avariado), bloqueia o motoboy na hora: não recebe novas OS
+    #    e a tela "Minhas Entregas" mostra o aviso "Veículo Avariado" com o botão "Consertei o Veículo"
+    if causa == 'ACIDENTE':
+        motoboy_profile.is_available = False
+        motoboy_profile.save()
 
     messages.warning(request, "Ocorrência enviada! O despachante já foi notificado.")
     return redirect('motoboy_tasks')
@@ -1240,12 +1307,10 @@ def os_details_view(request, os_id):
             return redirect('root')
         elif request.user.type == 'MOTOBOY' and os_obj.motoboy != request.user.motoboy_profile:
             return redirect('root')
-            
-    # Busca os relacionamentos
+
     items = os_obj.items.all()
     destinations = os_obj.destinations.all()
     stops = os_obj.stops.all().order_by('sequence')
-    
     context = {
         'os': os_obj,
         'items': items,
@@ -1254,3 +1319,17 @@ def os_details_view(request, os_id):
     }
     
     return render(request, 'orders/os_details.html', context)
+
+@login_required
+@require_POST
+def motoboy_fix_vehicle_view(request):
+    """ Desbloqueia o motoboy após ele consertar o veículo """
+    if request.user.type != 'MOTOBOY':
+        return JsonResponse({'error': 'Acesso negado'}, status=403)
+    
+    perfil = request.user.motoboy_profile
+    perfil.is_available = True
+    perfil.save()
+    
+    messages.success(request, "Veículo consertado! Você está online e disponível na base.")
+    return redirect('motoboy_tasks')

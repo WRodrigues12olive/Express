@@ -295,7 +295,8 @@ function submitTransfer() {
         body: JSON.stringify({ 
             acao: 'TRANSFERIR_MOTOBOY',
             novo_motoboy_id: motoboyId,
-            local_encontro: local
+            local_encontro: local,
+            'furar_fila': document.getElementById('furar_fila').checked
         })
     })
     .then(response => response.json())
