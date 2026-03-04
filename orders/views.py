@@ -11,7 +11,7 @@ from .forms import ServiceOrderForm
 from django.utils import timezone
 from logistics.models import MotoboyProfile
 from django.core.cache import cache
-from django.db.models import Q, F, Count
+from django.db.models import Q, F, Count, Max
 from django.db import transaction
 from orders.models import Occurrence, DispatcherDecision
 from orders.services import transferir_rota_por_acidente
@@ -63,10 +63,84 @@ def resolve_occurrence_view(request, occurrence_id):
             return JsonResponse({'status': 'success', 'message': 'Rota transferida com sucesso!'})
 
         elif acao == DispatcherDecision.Acao.REAGENDAR:
+            motoboy_da_parada = parada.motoboy
+            incluir_novo_endereco = bool(data.get('incluir_novo_endereco'))
+            novo_endereco = data.get('novo_endereco') or {}
+
+            if incluir_novo_endereco:
+                if ocorrencia.causa != Occurrence.Causa.NAO_LOCALIZADO:
+                    return JsonResponse({
+                        'status': 'error',
+                        'message': 'Novo endereco so pode ser informado para ocorrencia de endereco nao localizado.'
+                    }, status=400)
+
+                street = (novo_endereco.get('street') or '').strip()
+                city = (novo_endereco.get('city') or '').strip()
+                if not street or not city:
+                    return JsonResponse({
+                        'status': 'error',
+                        'message': 'Para atualizar o endereco, preencha ao menos Rua e Cidade.'
+                    }, status=400)
+
+                number = (novo_endereco.get('number') or '').strip()
+                district = (novo_endereco.get('district') or '').strip()
+                state = (novo_endereco.get('state') or '').strip().upper()
+                cep = (novo_endereco.get('cep') or '').strip()
+                complement = (novo_endereco.get('complement') or '').strip()
+
+                # Inteligente para o tipo da parada com problema:
+                # COLETA -> atualiza origem da OS da parada.
+                # ENTREGA -> atualiza destino vinculado a parada.
+                if parada.stop_type == RouteStop.StopType.COLLECTION:
+                    os_alvo = parada.service_order
+                    os_alvo.origin_street = street
+                    os_alvo.origin_number = number
+                    os_alvo.origin_complement = complement
+                    os_alvo.origin_district = district
+                    os_alvo.origin_city = city
+                    os_alvo.origin_state = state
+                    os_alvo.origin_zip_code = cep
+                    os_alvo.save(update_fields=[
+                        'origin_street', 'origin_number', 'origin_complement',
+                        'origin_district', 'origin_city', 'origin_state', 'origin_zip_code'
+                    ])
+
+                elif parada.stop_type == RouteStop.StopType.DELIVERY and parada.destination_id:
+                    dest = parada.destination
+                    dest.destination_street = street
+                    dest.destination_number = number
+                    dest.destination_complement = complement
+                    dest.destination_district = district
+                    dest.destination_city = city
+                    dest.destination_state = state
+                    dest.destination_zip_code = cep
+                    dest.save(update_fields=[
+                        'destination_street', 'destination_number', 'destination_complement',
+                        'destination_district', 'destination_city', 'destination_state', 'destination_zip_code'
+                    ])
+                else:
+                    return JsonResponse({
+                        'status': 'error',
+                        'message': 'Novo endereco so pode ser aplicado em paradas de coleta ou entrega.'
+                    }, status=400)
+
             parada.is_failed = False
             parada.bloqueia_proxima = False
             parada.status = RouteStop.StopStatus.PENDENTE
             parada.failure_reason = ""
+
+            # Se o motoboy já estiver com outras paradas pendentes,
+            # manda esta tentativa para o final da fila dele.
+            if motoboy_da_parada:
+                outras_pendentes = RouteStop.objects.filter(
+                    motoboy=motoboy_da_parada,
+                    is_completed=False
+                ).exclude(id=parada.id)
+
+                if outras_pendentes.exists():
+                    ultima_seq = outras_pendentes.aggregate(max_seq=Max('sequence'))['max_seq'] or 0
+                    parada.sequence = ultima_seq + 1
+
             parada.save()
             
             root_os = os_atual.parent_os or os_atual
@@ -75,6 +149,12 @@ def resolve_occurrence_view(request, occurrence_id):
             group_stops = RouteStop.objects.filter(service_order__in=grouped_orders)
             new_status = 'COLETADO' if group_stops.filter(stop_type='COLETA', is_completed=True).exists() else 'ACEITO'
             grouped_orders.update(status=new_status)
+
+            if incluir_novo_endereco:
+                root_os.operational_notes += (
+                    f"\n[ENDERECO ATUALIZADO] Tentativa reativada com novo endereco na parada {parada.get_stop_type_display()}."
+                )
+                root_os.save(update_fields=['operational_notes'])
 
             DispatcherDecision.objects.create(
                 occurrence=ocorrencia, acao=acao, 
@@ -938,6 +1018,14 @@ def resolve_os_problem(request, os_id):
 
     if action == 'reactivate':
         # Reativar: O despachante mandou o motoboy tentar de novo.
+        failed_stop_ids = list(
+            RouteStop.objects.filter(
+                service_order__in=grouped_orders,
+                is_completed=False,
+                is_failed=True
+            ).values_list('id', flat=True)
+        )
+
         group_stops = RouteStop.objects.filter(service_order__in=grouped_orders)
         new_status = 'COLETADO' if group_stops.filter(stop_type='COLETA', is_completed=True).exists() else 'ACEITO'
         
@@ -948,6 +1036,21 @@ def resolve_os_problem(request, os_id):
         RouteStop.objects.filter(
             service_order__in=grouped_orders, is_completed=False, is_failed=True
         ).update(is_failed=False, failure_reason="")
+
+        # Coloca as paradas reativadas no fim da rota atual do motoboy.
+        for stop in RouteStop.objects.filter(id__in=failed_stop_ids).select_related('motoboy'):
+            if not stop.motoboy_id or stop.is_completed:
+                continue
+
+            outras_pendentes = RouteStop.objects.filter(
+                motoboy=stop.motoboy,
+                is_completed=False
+            ).exclude(id=stop.id)
+
+            if outras_pendentes.exists():
+                ultima_seq = outras_pendentes.aggregate(max_seq=Max('sequence'))['max_seq'] or 0
+                stop.sequence = ultima_seq + 1
+                stop.save(update_fields=['sequence'])
         
     elif action == 'unassign':
         # Desvincular: Tira do motoboy e devolve para a fila (Útil se a loja fechou antes dele coletar)

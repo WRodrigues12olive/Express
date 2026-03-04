@@ -108,9 +108,13 @@ class OSItem(models.Model):
     item_notes = models.TextField(blank=True, verbose_name="Observações do Item")
 
     def clean(self):
-        # Validação Anti-Bug de Estado
-        if self.status == self.ItemStatus.ENTREGUE and not self.posse_atual:
-            raise ValidationError("Um item não pode ser entregue se não estava em posse de um motoboy.")
+        if self.status in [self.ItemStatus.COLETADO, self.ItemStatus.TRANSFERIDO]:
+            if not self.posse_atual:
+                raise ValidationError(f"Erro de consistência: Um item '{self.get_status_display()}' precisa estar vinculado à posse de um motoboy.")
+                
+        elif self.status in [self.ItemStatus.NAO_COLETADO, self.ItemStatus.ENTREGUE, self.ItemStatus.RETORNADO, self.ItemStatus.EXTRAVIADO]:
+            if self.posse_atual:
+                raise ValidationError(f"Erro de consistência: Um item '{self.get_status_display()}' não pode continuar no baú/posse de um motoboy.")
 
     def __str__(self):
         return f"{self.total_quantity}x {self.description}"

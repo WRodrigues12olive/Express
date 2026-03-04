@@ -118,10 +118,12 @@ function verOSCompleta() {
 // ====================================================
 // NOVO SISTEMA DE OCORRÊNCIAS (FASE 4)
 // ====================================================
-function openDecisionModal(occurrenceId, causaText, obsText, fotoUrl) {
+function openDecisionModal(occurrenceId, causaText, obsText, fotoUrl, causaCode = '', stopType = '') {
     document.getElementById('currentOccurrenceId').value = occurrenceId;
+    document.getElementById('currentOccurrenceCauseCode').value = causaCode || '';
+    document.getElementById('currentOccurrenceStopType').value = stopType || '';
     document.getElementById('decCausa').innerText = causaText;
-    document.getElementById('decObs').innerText = obsText || 'Sem observações.';
+    document.getElementById('decObs').innerText = obsText || 'Sem observacoes.';
     
     const fotoBox = document.getElementById('decFotoBox');
     const fotoLink = document.getElementById('decFotoLink');
@@ -134,7 +136,42 @@ function openDecisionModal(occurrenceId, causaText, obsText, fotoUrl) {
     }
 
     document.getElementById('transferDecisionBox').classList.add('d-none');
-    
+
+    const canSuggestNewAddress = causaCode === 'NAO_LOCALIZADO' && (stopType === 'COLETA' || stopType === 'ENTREGA');
+    const toggleBtn = document.getElementById('toggleNewAddressBtn');
+    const reagendarBox = document.getElementById('reagendarAddressBox');
+    if (toggleBtn) toggleBtn.classList.toggle('d-none', !canSuggestNewAddress);
+    if (reagendarBox) reagendarBox.classList.add('d-none');
+
+    const transferFields = [
+        'decTransferCep',
+        'decTransferStreet',
+        'decTransferNumber',
+        'decTransferComplement',
+        'decTransferDistrict',
+        'decTransferCity',
+        'decTransferState',
+        'localEncontro'
+    ];
+    transferFields.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+
+    const reagendarFields = [
+        'reagendarCep',
+        'reagendarStreet',
+        'reagendarNumber',
+        'reagendarComplement',
+        'reagendarDistrict',
+        'reagendarCity',
+        'reagendarState'
+    ];
+    reagendarFields.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+
     new bootstrap.Modal(document.getElementById('decisionModal')).show();
 }
 
@@ -143,16 +180,48 @@ function toggleTransferBox() {
     box.classList.toggle('d-none');
 }
 
+function toggleReagendarAddressBox() {
+    const box = document.getElementById('reagendarAddressBox');
+    if (box) box.classList.toggle('d-none');
+}
+
 function submitDecision(acao) {
     const occId = document.getElementById('currentOccurrenceId').value;
+    const causaCode = document.getElementById('currentOccurrenceCauseCode')?.value || '';
+    const stopType = document.getElementById('currentOccurrenceStopType')?.value || '';
+    const canSuggestNewAddress = causaCode === 'NAO_LOCALIZADO' && (stopType === 'COLETA' || stopType === 'ENTREGA');
+    const reagendarBox = document.getElementById('reagendarAddressBox');
+
+    const payload = { acao: acao };
+    if (acao === 'REAGENDAR' && canSuggestNewAddress && reagendarBox && !reagendarBox.classList.contains('d-none')) {
+        const novoEndereco = {
+            cep: document.getElementById('reagendarCep')?.value || '',
+            street: document.getElementById('reagendarStreet')?.value || '',
+            number: document.getElementById('reagendarNumber')?.value || '',
+            complement: document.getElementById('reagendarComplement')?.value || '',
+            district: document.getElementById('reagendarDistrict')?.value || '',
+            city: document.getElementById('reagendarCity')?.value || '',
+            state: document.getElementById('reagendarState')?.value || ''
+        };
+
+        const hasAny = Object.values(novoEndereco).some(v => (v || '').trim() !== '');
+        if (hasAny) {
+            if (!novoEndereco.street.trim() || !novoEndereco.city.trim()) {
+                alert('Preencha pelo menos Rua e Cidade para atualizar o endereco.');
+                return;
+            }
+            payload.incluir_novo_endereco = true;
+            payload.novo_endereco = novoEndereco;
+        }
+    }
     
     fetch(`/orders/occurrence/${occId}/resolve/`, { 
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'X-CSRFToken': getCSRFToken() // <-- Usando a função mais segura
+            'X-CSRFToken': getCSRFToken() // <-- Usando a funcao mais segura
         },
-        body: JSON.stringify({ acao: acao })
+        body: JSON.stringify(payload)
     })
     .then(response => response.json())
     .then(data => {
@@ -164,12 +233,58 @@ function submitDecision(acao) {
     });
 }
 
+function buscarCepReagendar(cep) {
+    cep = (cep || '').replace(/\D/g, '');
+    if (cep.length !== 8) return;
+    fetch(`https://viacep.com.br/ws/${cep}/json/`)
+        .then(res => res.json())
+        .then(data => {
+            if (!data.erro) {
+                const street = document.getElementById('reagendarStreet');
+                const district = document.getElementById('reagendarDistrict');
+                const city = document.getElementById('reagendarCity');
+                const state = document.getElementById('reagendarState');
+                const number = document.getElementById('reagendarNumber');
+                if (street) street.value = data.logradouro || '';
+                if (district) district.value = data.bairro || '';
+                if (city) city.value = data.localidade || '';
+                if (state) state.value = data.uf || '';
+                if (number) number.focus();
+            } else {
+                alert('CEP nao encontrado.');
+            }
+        })
+        .catch(err => console.error(err));
+}
+
 function submitTransfer() {
     const occId = document.getElementById('currentOccurrenceId').value;
     const motoboyId = document.getElementById('socorristaSelect').value;
-    const local = document.getElementById('localEncontro').value;
+    const cep = document.getElementById('decTransferCep')?.value || '';
+    const street = document.getElementById('decTransferStreet')?.value || '';
+    const number = document.getElementById('decTransferNumber')?.value || '';
+    const complement = document.getElementById('decTransferComplement')?.value || '';
+    const district = document.getElementById('decTransferDistrict')?.value || '';
+    const city = document.getElementById('decTransferCity')?.value || '';
+    const state = document.getElementById('decTransferState')?.value || '';
     
     if(!motoboyId) { alert("Selecione o motoboy socorrista."); return; }
+
+    const hasAnyAddress = [street, number, district, city, state, cep, complement].some(v => (v || '').trim() !== '');
+    let local = document.getElementById('localEncontro')?.value || '';
+    if (hasAnyAddress) {
+        const parts = [];
+        if (street) {
+            let streetLine = street;
+            if (number) streetLine += `, ${number}`;
+            parts.push(streetLine);
+        }
+        if (district) parts.push(`Bairro: ${district}`);
+        if (city || state) parts.push(`${city}${city && state ? '/' : ''}${state}`);
+        if (cep) parts.push(`CEP: ${cep}`);
+        if (complement) parts.push(`Ref: ${complement}`);
+        local = parts.join(' - ');
+    }
     
     fetch(`/orders/occurrence/${occId}/resolve/`, {
         method: 'POST',
@@ -317,6 +432,8 @@ function fetchAndRenderStops(osId) {
             const isColeta = stop.type === 'COLETA';
             const icon = isColeta ? '<i class="bi bi-box-arrow-up text-danger fs-4"></i>' : '<i class="bi bi-box-arrow-down text-success fs-4"></i>';
             const badgeColor = isColeta ? 'bg-danger' : 'bg-success';
+            const mapsQuery = (stop.address || '').replace(/^\(OS [^)]+\)\s*/, '');
+            const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(mapsQuery)}`;
             
             list.innerHTML += `
                 <li class="list-group-item d-flex align-items-center gap-3 py-3" data-id="${stop.id}" data-type="${stop.type}" style="cursor: grab;">
@@ -328,6 +445,9 @@ function fetchAndRenderStops(osId) {
                         <strong class="text-dark d-block mb-1">${stop.location}</strong>
                         <small class="text-muted d-flex align-items-center gap-1"><i class="bi bi-geo-alt"></i> ${stop.address}</small>
                     </div>
+                    <a href="${mapsUrl}" target="_blank" class="btn btn-sm btn-outline-primary fw-bold">
+                        <i class="bi bi-cursor"></i> Ver Local
+                    </a>
                     <i class="bi bi-grip-vertical text-muted fs-5"></i>
                 </li>
             `;
@@ -604,3 +724,28 @@ function submitCreateReturn() {
         else { alert("Erro ao agendar devolução."); document.body.style.cursor = 'default'; }
     });
 }
+
+function buscarCepTransferenciaDecisao(cep) {
+    cep = (cep || '').replace(/\D/g, '');
+    if (cep.length !== 8) return;
+    fetch(`https://viacep.com.br/ws/${cep}/json/`)
+        .then(res => res.json())
+        .then(data => {
+            if (!data.erro) {
+                const street = document.getElementById('decTransferStreet');
+                const district = document.getElementById('decTransferDistrict');
+                const city = document.getElementById('decTransferCity');
+                const state = document.getElementById('decTransferState');
+                const number = document.getElementById('decTransferNumber');
+                if (street) street.value = data.logradouro || '';
+                if (district) district.value = data.bairro || '';
+                if (city) city.value = data.localidade || '';
+                if (state) state.value = data.uf || '';
+                if (number) number.focus();
+            } else {
+                alert("CEP não encontrado.");
+            }
+        })
+        .catch(err => console.error(err));
+}
+
