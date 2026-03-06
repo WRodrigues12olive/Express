@@ -11,7 +11,7 @@ from .forms import ServiceOrderForm
 from django.utils import timezone
 from logistics.models import MotoboyProfile
 from django.core.cache import cache
-from django.db.models import Q, F, Count, Max
+from django.db.models import Q, F, Count, Max, Exists, OuterRef
 from django.db import transaction
 from orders.models import Occurrence, DispatcherDecision
 from orders.services import transferir_rota_por_acidente
@@ -54,12 +54,15 @@ def resolve_occurrence_view(request, occurrence_id):
             novo_motoboy_id = data.get('novo_motoboy_id')
             local_encontro = data.get('local_encontro', 'Base da Empresa')
             furar_fila = bool(data.get('furar_fila', True))
-            
+            transfer_all_cargo = str(data.get('transfer_all_cargo', 'false')).lower() == 'true'
+
             if not novo_motoboy_id:
                 return JsonResponse({'status': 'error', 'message': 'Selecione um motoboy.'}, status=400)
                 
             # Chama a função cirúrgica que criámos no services.py
-            transferir_rota_por_acidente(ocorrencia.id, novo_motoboy_id, local_encontro, request.user, furar_fila)
+            transferir_rota_por_acidente(
+                ocorrencia.id, novo_motoboy_id, local_encontro, request.user, furar_fila, transfer_all_cargo
+            )
             
             return JsonResponse({'status': 'success', 'message': 'Rota transferida com sucesso!'})
 
@@ -208,25 +211,44 @@ def resolve_occurrence_view(request, occurrence_id):
             ocorrencia.save()
 
         elif acao == DispatcherDecision.Acao.RETORNAR:
+            endereco_retorno = data.get('endereco_retorno', 'Base da Empresa')
+            is_priority = data.get('is_priority', False)
+
+            # 1. Finaliza a parada que falhou (tira-a da frente)
             parada.is_failed = True
             parada.is_completed = True
             parada.completed_at = timezone.now()
             parada.status = RouteStop.StopStatus.COM_OCORRENCIA
             parada.save()
             
-            # Cria a parada extra de devolução
+            # 2. Desbloqueia as paradas pendentes desse motoboy (Para tirar a "Rota Suspensa")
+            motoboy = ocorrencia.motoboy
+            motoboy.route_stops.filter(is_completed=False).update(is_failed=False, bloqueia_proxima=False, failure_reason="")
+
+            # 3. Calcula a sequência (Onde a devolução vai entrar)
+            if is_priority:
+                current_active = motoboy.route_stops.filter(is_completed=False).order_by('sequence').first()
+                sequence_to_use = current_active.sequence if current_active else parada.sequence + 1
+                motoboy.route_stops.filter(is_completed=False, sequence__gte=sequence_to_use).update(sequence=F('sequence') + 1)
+            else:
+                ultima = motoboy.route_stops.aggregate(max_seq=Max('sequence'))['max_seq'] or 0
+                sequence_to_use = ultima + 1
+                
+            # 4. Cria a parada de DEVOLUÇÃO com o texto 100% correto
             RouteStop.objects.create(
                 service_order=os_atual,
-                motoboy=ocorrencia.motoboy,
-                stop_type=RouteStop.StopType.RETURN,
-                sequence=parada.sequence + 1,
-                failure_reason=data.get('endereco_retorno', 'Devolver na Base'),
-                status=RouteStop.StopStatus.PENDENTE
+                motoboy=motoboy,
+                stop_type='DEVOLUCAO',
+                sequence=sequence_to_use,
+                failure_reason=f"Devolver em: {endereco_retorno}",
+                status='PENDENTE',
+                bloqueia_proxima=False
             )
             
+            # 5. Resolve a ocorrência e atualiza logs
             DispatcherDecision.objects.create(
                 occurrence=ocorrencia, acao=acao, 
-                detalhes="Devolução agendada para a base.", 
+                detalhes=f"Devolução agendada para: {endereco_retorno} (Prioridade: {is_priority})", 
                 decidido_por=request.user
             )
             
@@ -236,7 +258,7 @@ def resolve_occurrence_view(request, occurrence_id):
             root_os = os_atual.parent_os or os_atual
             grouped_orders = ServiceOrder.objects.filter(Q(id=root_os.id) | Q(parent_os=root_os))
             grouped_orders.update(status='COLETADO')
-
+            
         elif acao == 'VOLTAR_FILA':
             root_os = os_atual.parent_os or os_atual
             grouped_orders = ServiceOrder.objects.filter(Q(id=root_os.id) | Q(parent_os=root_os))
@@ -519,7 +541,18 @@ def dispatch_dashboard_view(request):
         'total_ocorrencias': total_ocorrencias,
         'now': timezone.now(),
     }
-    context['ocorrencias_pendentes'] = Occurrence.objects.filter(resolvida=False).order_by('-urgencia', '-criado_em')
+    context['ocorrencias_pendentes'] = Occurrence.objects.filter(resolvida=False).annotate(
+        has_extra_cargo=Exists(
+            ServiceOrder.objects.filter(
+                motoboy=OuterRef('motoboy_id'),
+                status='COLETADO'
+            ).exclude(
+                id=OuterRef('service_order_id')  # Exclui a própria OS da ocorrência
+            ).exclude(
+                parent_os=OuterRef('service_order_id') # Exclui as filhas da OS da ocorrência
+            )
+        )
+    ).order_by('-urgencia', '-criado_em')
 
     return render(request, 'orders/dispatch_panel.html', context)
 
@@ -1065,6 +1098,17 @@ def report_problem_view(request, stop_id):
     if causa == 'ACIDENTE':
         motoboy_profile.is_available = False
         motoboy_profile.save()
+        
+        os_nao_coletadas = ServiceOrder.objects.filter(
+            motoboy=motoboy_profile,
+            status='ACEITO'
+        ).exclude(
+            Q(id=os_atual.id) | Q(parent_os=os_atual) | Q(id=os_atual.parent_os_id)
+        )
+        
+        if os_nao_coletadas.exists():
+            RouteStop.objects.filter(service_order__in=os_nao_coletadas, is_completed=False).update(motoboy=None, status='PENDENTE')
+            os_nao_coletadas.update(motoboy=None, status='PENDENTE')
 
     messages.warning(request, "Ocorrência enviada! O despachante já foi notificado.")
     return redirect('motoboy_tasks')
@@ -1298,24 +1342,34 @@ def create_return_view(request, os_id):
 
 @login_required
 def os_details_view(request, os_id):
-    """ Exibe a visão completa e detalhada de uma OS (Itens, Destinos, Pesos, etc) """
+    """ Exibe a visão completa e detalhada de uma OS (Itens, Destinos, Pesos, Histórico, etc) """
     os_obj = get_object_or_404(ServiceOrder, id=os_id)
     
     # Segurança: Apenas quem tem direito pode ver
     if request.user.type not in ['ADMIN', 'DISPATCHER'] and not request.user.is_superuser:
         if request.user.type == 'COMPANY' and os_obj.client != request.user:
             return redirect('root')
-        elif request.user.type == 'MOTOBOY' and os_obj.motoboy != request.user.motoboy_profile:
+        elif request.user.type == 'MOTOBOY' and getattr(os_obj.motoboy, 'user', None) != request.user:
             return redirect('root')
 
     items = os_obj.items.all()
     destinations = os_obj.destinations.all()
-    stops = os_obj.stops.all().order_by('sequence')
+    
+    # Pega as paradas reais da rota (inclui as da OS mãe e das filhas se for agrupada)
+    root_os = os_obj.parent_os or os_obj
+    grouped_orders = ServiceOrder.objects.filter(Q(id=root_os.id) | Q(parent_os=root_os))
+    stops = RouteStop.objects.filter(service_order__in=grouped_orders).order_by('sequence')
+    
+    from orders.models import Occurrence # Garanta que Occurrence está importado no topo do ficheiro
+    ocorrencias = Occurrence.objects.filter(service_order__in=grouped_orders).order_by('-criado_em')
+
     context = {
         'os': os_obj,
+        'root_os': root_os, 
         'items': items,
         'destinations': destinations,
         'stops': stops,
+        'ocorrencias': ocorrencias, # Adicionado ao context
     }
     
     return render(request, 'orders/os_details.html', context)

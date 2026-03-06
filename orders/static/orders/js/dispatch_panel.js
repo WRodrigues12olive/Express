@@ -118,12 +118,18 @@ function verOSCompleta() {
 // ====================================================
 // NOVO SISTEMA DE OCORRÊNCIAS (FASE 4)
 // ====================================================
-function openDecisionModal(occurrenceId, causaText, obsText, fotoUrl, causaCode = '', stopType = '') {
+let currentHasExtraCargo = false;
+let currentOccurrenceOsId = null;
+
+function openDecisionModal(occurrenceId, osId, causaText, obsText, fotoUrl, causaCode = '', stopType = '', hasExtraCargo = 'false') {
     document.getElementById('currentOccurrenceId').value = occurrenceId;
+    currentOccurrenceOsId = osId;
     document.getElementById('currentOccurrenceCauseCode').value = causaCode || '';
     document.getElementById('currentOccurrenceStopType').value = stopType || '';
     document.getElementById('decCausa').innerText = causaText;
     document.getElementById('decObs').innerText = obsText || 'Sem observacoes.';
+
+    currentHasExtraCargo = hasExtraCargo === 'true';
     
     const fotoBox = document.getElementById('decFotoBox');
     const fotoLink = document.getElementById('decFotoLink');
@@ -178,6 +184,15 @@ function openDecisionModal(occurrenceId, causaText, obsText, fotoUrl, causaCode 
 function toggleTransferBox() {
     const box = document.getElementById('transferDecisionBox');
     box.classList.toggle('d-none');
+    
+    const extraCargoAlert = document.getElementById('extraCargoAlert');
+    if (extraCargoAlert) {
+        if (!box.classList.contains('d-none') && currentHasExtraCargo) {
+            extraCargoAlert.classList.remove('d-none');
+        } else {
+            extraCargoAlert.classList.add('d-none');
+        }
+    }
 }
 
 function toggleReagendarAddressBox() {
@@ -285,6 +300,9 @@ function submitTransfer() {
         if (complement) parts.push(`Ref: ${complement}`);
         local = parts.join(' - ');
     }
+
+    const transferAllCargoEl = document.getElementById('transfer_all_cargo');
+    const transferAllCargo = transferAllCargoEl && currentHasExtraCargo ? transferAllCargoEl.checked : false;
     
     fetch(`/orders/occurrence/${occId}/resolve/`, {
         method: 'POST',
@@ -296,7 +314,8 @@ function submitTransfer() {
             acao: 'TRANSFERIR_MOTOBOY',
             novo_motoboy_id: motoboyId,
             local_encontro: local,
-            'furar_fila': document.getElementById('furar_fila').checked
+            'furar_fila': document.getElementById('furar_fila').checked,
+            'transfer_all_cargo': transferAllCargo
         })
     })
     .then(response => response.json())
@@ -601,10 +620,21 @@ function openTransferModal() {
 }
 
 function openReturnModal() {
-    var resolveModal = bootstrap.Modal.getInstance(document.getElementById('resolveProblemModal'));
-    if(resolveModal) resolveModal.hide();
+    var decisionModal = bootstrap.Modal.getInstance(document.getElementById('decisionModal'));
+    if(decisionModal) decisionModal.hide();
+    
     var returnModal = new bootstrap.Modal(document.getElementById('createReturnModal'));
     returnModal.show();
+}
+function preencherEnderecoBase() {
+    const cepsEl = document.getElementById('returnCep');
+    if (cepsEl) cepsEl.value = '90000-000'; 
+    document.getElementById('returnStreet').value = 'Base da Transportadora';
+    document.getElementById('returnNumber').value = 'S/N';
+    document.getElementById('returnDistrict').value = 'Centro';
+    document.getElementById('returnCity').value = 'Sua Cidade';
+    document.getElementById('returnState').value = 'RS';
+    document.getElementById('returnComplement').value = 'Setor de Triagem';
 }
 
 function buscarCepDevolucao(cep) {
@@ -694,7 +724,8 @@ function submitTransferRoute() {
 }
 
 function submitCreateReturn() {
-    if (!problemOsId) return;
+    const occId = document.getElementById('currentOccurrenceId').value;
+    if (!occId) return;
     
     const cep = document.getElementById('returnCep').value;
     const street = document.getElementById('returnStreet').value;
@@ -707,22 +738,30 @@ function submitCreateReturn() {
     const priorityElem = document.getElementById('returnPriority');
     const isPriority = priorityElem ? priorityElem.checked : false;
 
-    if (!street || !number || !district || !city) { alert("⚠️ Por favor, preencha pelo menos a Rua, Número, Bairro e Cidade para a devolução!"); return; }
+    if (!street || !number || !district || !city) { 
+        alert("⚠️ Por favor, preencha pelo menos a Rua, Número, Bairro e Cidade para a devolução!"); 
+        return; 
+    }
 
     let returnAddress = `${street}, ${number}`;
     if (complement) returnAddress += ` - ${complement}`;
     returnAddress += ` - Bairro: ${district}, ${city}/${state} - CEP: ${cep}`;
 
     document.body.style.cursor = 'wait';
-    fetch(`/painel-despacho/devolver/${problemOsId}/`, {
+    
+    fetch(`/orders/occurrence/${occId}/resolve/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
-        body: JSON.stringify({ return_address: returnAddress, is_priority: isPriority })
+        body: JSON.stringify({ 
+            acao: 'RETORNAR', 
+            endereco_retorno: returnAddress, 
+            is_priority: isPriority 
+        })
     })
     .then(res => res.json())
     .then(data => {
         if(data.status === 'success') window.location.reload();
-        else { alert("Erro ao agendar devolução."); document.body.style.cursor = 'default'; }
+        else { alert("Erro ao agendar devolução: " + data.message); document.body.style.cursor = 'default'; }
     });
 }
 
@@ -750,3 +789,7 @@ function buscarCepTransferenciaDecisao(cep) {
         .catch(err => console.error(err));
 }
 
+function verOSCompletaOcorrencia() {
+    if (!currentOccurrenceOsId) return;
+    window.location.href = `/os/${currentOccurrenceOsId}/detalhes/`;
+}

@@ -129,8 +129,8 @@
                                             '{{ os.origin_name|escapejs }}',
                                             '{{ os.origin_street|escapejs }}, {{ os.origin_number }} - {{ os.origin_district|escapejs }}',
                                             '{{ os.operational_notes|escapejs }}',
-                                            '{% if os.child_orders.all %}{% for child in os.child_orders.all %}{{ child.id }}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}',
-                                            '{% if os.child_orders.all %}{% for child in os.child_orders.all %}{{ child.os_number }}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}'
+                                            '{% if os.child_orders.all %}{% for child in os.child_orders.all %}{{ child.id }}{% if not forloop.last %},{% endif %}{% endfor %}{% endif %}',
+                                            '{% if os.child_orders.all %}{% for child in os.child_orders.all %}{{ child.os_number }}{% if not forloop.last %},{% endif %}{% endfor %}{% endif %}'
                                         )">
                                     Ver Detalhes
                                 </button>
@@ -178,7 +178,7 @@
                                             <p class="text-slate-600 small mb-0">OS {{ occ.service_order.os_number }} • Paragem {{ occ.parada.sequence }}</p>
                                         </div>
                                         
-                                        <button onclick="openDecisionModal('{{ occ.id }}', '{{ occ.get_causa_display }}', '{{ occ.observacao|escapejs }}', '{% if occ.evidencia_foto %}{{ occ.evidencia_foto.url }}{% endif %}', '{{ occ.causa }}', '{{ occ.parada.stop_type }}')" 
+                                        <button onclick="openDecisionModal('{{ occ.id }}', '{{ occ.service_order.id }}', '{{ occ.get_causa_display }}', '{{ occ.observacao|escapejs }}', '{% if occ.evidencia_foto %}{{ occ.evidencia_foto.url }}{% endif %}', '{{ occ.causa }}', '{{ occ.parada.stop_type }}', '{{ occ.has_extra_cargo|yesno:"true,false" }}')" 
                                                 class="btn btn-sm btn-danger fw-bold shadow-sm">
                                             Resolver Agora
                                         </button>
@@ -506,8 +506,12 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body p-4 bg-slate-50">
-                <p class="small text-muted mb-4">A paragem atual será marcada como "Falha". Preencha os dados do local onde o pacote deverá ser devolvido.</p>
-                
+                <div class="d-flex justify-content-between align-items-start mb-4">
+                    <p class="small text-muted mb-0" style="max-width: 70%;">A paragem atual será marcada como "Falha". Preencha os dados do local onde o pacote deverá ser devolvido.</p>
+                    <button type="button" class="btn btn-sm btn-outline-info fw-bold bg-white" onclick="preencherEnderecoBase()">
+                        <i class="bi bi-building"></i> Endereço da Base
+                    </button>
+                </div>
                 <div class="row g-3">
                     <div class="col-md-3">
                         <label class="form-label fw-bold small text-muted mb-1">CEP</label>
@@ -560,11 +564,16 @@
 <div class="modal fade" id="decisionModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content border-0 rounded-4 shadow-lg overflow-hidden">
-            <div class="modal-header bg-danger text-white border-0 p-4">
-                <h5 class="modal-title fw-bold">
+            <div class="modal-header bg-danger text-white border-0 p-4 d-flex justify-content-between align-items-center">
+                <h5 class="modal-title fw-bold mb-0">
                     <i class="bi bi-shield-exclamation"></i> Tratar Ocorrência
                 </h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                <div class="d-flex align-items-center gap-3">
+                    <button type="button" class="btn btn-light text-danger btn-sm fw-bold shadow-sm" onclick="verOSCompletaOcorrencia()">
+                        <i class="bi bi-file-earmark-text"></i> Ver OS Completa
+                    </button>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
             </div>
             
             <div class="modal-body p-4 bg-slate-50">
@@ -630,7 +639,7 @@
                         </div>
                     </div>
                     
-                    <button onclick="submitDecision('RETORNAR')" class="btn btn-light border fw-bold p-3 text-start hover-bg-light transition-all">
+                    <button onclick="openReturnModal()" class="btn btn-light border fw-bold p-3 text-start hover-bg-light transition-all">
                         <i class="bi bi-arrow-return-left text-warning fs-5 me-2 align-middle"></i> 
                         Falha Definitiva (Agendar devolução para a base)
                     </button>
@@ -654,6 +663,17 @@
                             <option value="{{ data.profile.id }}">{{ data.profile.user.first_name }}</option>
                         {% endfor %}
                     </select>
+
+                    <div id="extraCargoAlert" class="alert alert-warning py-2 small fw-bold d-none my-3">
+                        <i class="bi bi-exclamation-triangle-fill text-warning me-1"></i> 
+                        Este motoboy tem <strong>outras cargas</strong> no baú.
+                        <div class="form-check mt-2">
+                            <input class="form-check-input" type="checkbox" id="transfer_all_cargo" checked>
+                            <label class="form-check-label text-dark" for="transfer_all_cargo">
+                                Transferir TODAS as cargas retidas para o socorrista
+                            </label>
+                        </div>
+                    </div>
 
                     <div class="row g-2 mt-1">
                         <div class="col-md-3">

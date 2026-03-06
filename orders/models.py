@@ -10,7 +10,7 @@ class ServiceOrder(models.Model):
     class Status(models.TextChoices):
         PENDING = 'PENDENTE', 'Pendente'
         AGRUPADO = 'AGRUPADO', 'Agrupado'
-        ACCEPTED = 'ACEITO', 'Aceito pelo Motoboy'
+        ACCEPTED = 'ACEITO', 'OS com o Motoboy'
         COLLECTED = 'COLETADO', 'Coletado / Em Trânsito'
         DELIVERED = 'ENTREGUE', 'Entregue'
         CANCELED = 'CANCELADO', 'Cancelado'

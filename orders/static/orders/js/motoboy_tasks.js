@@ -1,6 +1,19 @@
 const myOrders = window.MOTOBOY_ORDERS || [];
 let activeOs = null;
+
 const isActionableStop = (stop) => !stop.is_completed && !stop.is_waiting_rescue && !(stop.is_failed && !stop.bloqueia_proxima);
+
+// 👇 NOVA FUNÇÃO: Limpa o endereço removendo tudo antes dos dois pontos (:)
+function getCleanAddress(stop) {
+    let addr = stop.address || '';
+    if (stop.type === 'TRANSFERENCIA' || stop.type === 'DEVOLUCAO') {
+        const idx = addr.indexOf(':');
+        if (idx !== -1) {
+            addr = addr.substring(idx + 1).trim();
+        }
+    }
+    return addr;
+}
 
 function renderList() {
     const container = document.getElementById('os-list-container');
@@ -26,7 +39,6 @@ function renderList() {
         const nextStop = paradasPendentes.length > 0 ? paradasPendentes[0] : null;
         const hasWaitingRescue = os.stops.some(s => !s.is_completed && s.is_waiting_rescue);
         
-        // Lógica de cores e ícones atualizada
         let iconBgClass, iconColorClass, iconClass;
         if (nextStop && nextStop.type === 'COLETA') {
             iconBgClass = 'bg-warning bg-opacity-10'; iconColorClass = 'text-warning'; iconClass = 'bi-box-seam';
@@ -58,6 +70,9 @@ function renderList() {
 
         let nextStopHTML = '';
         if (nextStop) {
+            // Usa a função limpa para não mostrar a frase feia no mini-cartão
+            const previewAddress = getCleanAddress(nextStop);
+
             if (nextStop.is_frozen) {
                 nextStopHTML = `
                 <div class="alert alert-danger py-2 mb-0 mt-2 small fw-bold text-center border-danger">
@@ -72,7 +87,7 @@ function renderList() {
                     <div class="flex-grow-1 text-truncate">
                         <p class="text-slate-400 fw-bold text-uppercase mb-0" style="font-size: 0.6rem; letter-spacing: 1px;">Próxima Ação: ${nextStop.type}</p>
                         <p class="text-dark fw-bold text-truncate mb-0" style="font-size: 0.85rem;">${nextStop.name}</p>
-                        <p class="text-slate-500 text-truncate mb-0" style="font-size: 0.7rem;">${nextStop.address.split('-')[0]}</p>
+                        <p class="text-slate-500 text-truncate mb-0" style="font-size: 0.7rem;">${previewAddress.split('-')[0]}</p>
                     </div>
                 </div>`;
             }
@@ -121,45 +136,22 @@ function renderList() {
     document.getElementById('kpi-entregas').innerText = totalEntregasPendentes;
 }
 
-// === NOVA LÓGICA DE OCORRÊNCIA UNIFICADA ===
 function abrirModalOcorrencia() {
-    console.log("Tentando abrir o modal de ocorrência...");
-    
-    if (!activeOs) {
-        console.error("Erro: Nenhuma OS ativa no momento.");
-        return;
-    }
+    if (!activeOs) return;
     
     const currentStopIndex = activeOs.stops.findIndex(isActionableStop);
-    if (currentStopIndex === -1) {
-        console.error("Erro: Nenhuma parada pendente.");
-        return;
-    }
+    if (currentStopIndex === -1) return;
     
     const currentStop = activeOs.stops[currentStopIndex];
-    console.log("Parada com problema:", currentStop);
 
     const form = document.getElementById('occurrenceForm');
-    if (!form) {
-        console.error("Erro: O formulário de ocorrência não está no HTML.");
-        return;
-    }
-
-    // Mantive a sua URL antiga para evitar problemas de rota no urls.py
     form.action = `/minhas-entregas/problema/${currentStop.id}/`; 
     
     form.reset();
     handleCausaChange(); 
     
-    const modalEl = document.getElementById('occurrenceModal');
-    if (modalEl) {
-        // Inicialização mais segura do Bootstrap 5
-        const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
-        modal.show();
-        console.log("Modal aberto com sucesso!");
-    } else {
-        console.error("Erro: occurrenceModal não encontrado no HTML.");
-    }
+    const modal = new bootstrap.Modal(document.getElementById('occurrenceModal'));
+    modal.show();
 }
 
 function handleCausaChange() {
@@ -190,8 +182,6 @@ function handleCausaChange() {
         obs.classList.remove('border-danger');
     }
 }
-// ==========================================
-
 
 function openOS(id) {
     sessionStorage.setItem('reopenOsId', id); 
@@ -241,7 +231,11 @@ function openOS(id) {
         });
         itemsHTML += '</ul>';
         
-        const navUrl = `http://maps.google.com/maps?q=${encodeURIComponent(currentStop.address)}`;
+        // Puxa o endereço 100% limpo
+        const cleanAddress = getCleanAddress(currentStop);
+        
+        // Link Universal do Maps
+        const navUrl = `https://maps.google.com/?q=${encodeURIComponent(cleanAddress)}`;
 
         cardContainer.innerHTML = `
             <div class="d-flex justify-content-between align-items-center mb-3">
@@ -254,7 +248,7 @@ function openOS(id) {
             <div class="d-flex align-items-start gap-2 mt-3 mb-4">
                 <i class="bi bi-geo-alt fs-5 text-slate-400 mt-1"></i>
                 <div>
-                    <p class="text-dark fw-bold mb-0" style="font-size: 0.85rem;">${currentStop.address}</p>
+                    <p class="text-dark fw-bold mb-0" style="font-size: 0.85rem;">${cleanAddress}</p>
                     ${currentStop.reference && currentStop.reference !== 'Sem referência' ? `<p class="badge bg-warning bg-opacity-10 text-warning border border-warning border-opacity-25 mt-1 mb-0 p-1 text-wrap text-start">Ref: ${currentStop.reference}</p>` : ''}
                 </div>
             </div>
@@ -360,6 +354,9 @@ function openOS(id) {
         else if (stop.type === 'TRANSFERENCIA') typeBadge = 'bg-danger bg-opacity-10 text-danger';
         else if (stop.type === 'DEVOLUCAO') typeBadge = 'bg-info bg-opacity-10 text-info';
 
+        // Limpa o endereço também para a Timeline
+        const timelineEndereco = getCleanAddress(stop);
+
         timeline.innerHTML += `
             <div class="d-flex gap-3 position-relative z-1 mb-4 ${isCompleted ? 'opacity-50' : ''}">
                 <div class="${dotClass} rounded-circle d-flex align-items-center justify-content-center mt-1 flex-shrink-0" style="width: 22px; height: 22px; z-index: 2;">
@@ -372,7 +369,7 @@ function openOS(id) {
                         ${activeOs.has_children ? `<span class="badge bg-light text-secondary border px-1" style="font-size: 0.55rem;">${stop.os_origem}</span>` : ''}
                     </div>
                     <p class="fw-bold mb-0 ${isCurrent ? 'text-dark fs-6' : 'text-slate-500 small'}">${stop.name}</p>
-                    <p class="text-slate-400 mb-0 text-truncate" style="font-size: 0.7rem; max-width: 250px;">${stop.address.split('-')[0]}</p>
+                    <p class="text-slate-400 mb-0 text-truncate" style="font-size: 0.7rem; max-width: 250px;">${timelineEndereco.split('-')[0]}</p>
                 </div>
             </div>
         `;
